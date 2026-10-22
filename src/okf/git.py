@@ -272,6 +272,18 @@ def commits_changing_count(repo_root: Path, text: str, path: str) -> list[str]:
         return []
 
 
+def head_info(repo_root: Path | None) -> tuple[str | None, str | None]:
+    """(branch, short commit) of the checkout, for page headers; Nones outside git."""
+    if repo_root is None:
+        return None, None
+    try:
+        branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_root).strip()
+        sha = _git(["rev-parse", "--short", "HEAD"], cwd=repo_root).strip()
+    except GitError:
+        return None, None
+    return (None if branch == "HEAD" else branch), sha
+
+
 def web_base(repo_root: Path | None, env=None) -> str | None:
     """https://github.com/<owner>/<repo>/blob/<commit> for links to lines: from the GitHub Actions
     environment, else from the origin remote and HEAD. None if the repository is not on GitHub."""

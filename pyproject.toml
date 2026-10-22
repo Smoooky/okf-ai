@@ -39,7 +39,7 @@ okf = "okf.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-okf = ["templates/*.yml"]
+okf = ["templates/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

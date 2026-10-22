@@ -316,7 +316,7 @@ def _trust(args: argparse.Namespace) -> int:
     else:
         shown = trust_map.units
     if args.html:
-        page = trust_html(trust_map, root, now, shown, web_base(git_root), git_root)
+        page = trust_html(trust_map, root, now, shown, web_base(git_root), git_root, args.since)
         Path(args.html).write_text(page, encoding="utf-8", newline="\n")
     if args.json:
         data = {"summary": _trust_summary(trust_map), "warnings": [SHALLOW_HINT] if trust_map.shallow else [],
