@@ -373,6 +373,15 @@ def test_modified_file_may_outdate_instruction(repo):
     assert short(check(root, changes=changes)) == [(INFO, "AGENTS.md", "path")]
 
 
+def test_editing_a_linked_document_is_not_a_warning(repo):
+    root = repo({"AGENTS.md": "Read [conventions](docs/conventions.md).\n", "docs/conventions.md": "",
+                 "docs/old.md": ""})
+    assert check(root, changes=[Change("M", "docs/conventions.md")]) == []
+    root = repo({"AGENTS.md": "Read [old](docs/old.md).\n"})
+    (root / "docs/old.md").unlink()
+    assert short(check(root, changes=[Change("D", "docs/old.md")])) == [(WARN, "AGENTS.md", "path")]
+
+
 def test_changes_are_relative_to_git_root(repo):
     root = repo({"svc/AGENTS.md": "`src/auth.py`\n", "svc/src/auth.py": ""})
     report = check_repository((root / "svc").resolve(), False, [Change("M", "svc/src/auth.py")], root.resolve())

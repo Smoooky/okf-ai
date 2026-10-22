@@ -80,7 +80,8 @@ python -m pytest
 **В pull request** (`--base origin/main` или `--changed файлы...`) дополнительно:
 - файл, на который ссылается инструкция, переименован — `"src/config.py" was renamed to src/settings.py in this change`;
 - удалён — `was deleted or renamed in this change`;
-- изменён — WARNING `changed in this change; the instruction may be outdated`, или INFO, если инструкцию поправили в том же PR.
+- изменён файл кода (не `.md`) — WARNING `changed in this change; the instruction may be outdated`,
+  или INFO, если инструкцию поправили в том же PR. Правка документа, на который инструкция ссылается, нормальна и не сообщается.
 
 ## `okf validate <bundle> [--strict]`
 

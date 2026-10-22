@@ -49,6 +49,7 @@ YARN_BUILTINS = {
 LOCKFILES = (("pnpm-lock.yaml", "pnpm"), ("yarn.lock", "yarn"), ("bun.lockb", "bun"), ("bun.lock", "bun"),
              ("package-lock.json", "npm"))
 JS_RUNNERS = ("npm", "pnpm", "yarn", "bun")
+_DOCUMENT_SUFFIXES = {".md", ".mdx", ".markdown", ".txt", ".rst"}
 
 _FENCE_RE = re.compile(r"^\s{0,3}(`{3,}|~{3,})\s*([\w+-]*)")
 _PATH_RE = re.compile(r"^(?:\.{1,2}/)?[\w@.\-*]+(?:/[\w@.\-*]*)*$")
@@ -609,7 +610,7 @@ def _check_reference(subject: str, path: str, candidates: list[Path], line: int,
             report(problem, kind, f"{shown} does not exist", line)
         return
     touched = [c for c in hits if c.status != "D" and c.path in relatives]
-    if touched:
+    if touched and Path(path).suffix.lower() not in _DOCUMENT_SUFFIXES:  # editing a linked doc is routine
         if instruction_changed:
             report(INFO, kind, f"{shown} changed; the instruction was updated in the same change", line)
         else:
