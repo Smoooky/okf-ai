@@ -90,6 +90,12 @@ h1 { letter-spacing: -.035em; line-height: 1.16; }
 }
 .input-wrap textarea:focus { outline: 2px solid #dbe0ff; border-color: #4358dc; }
 .hint { margin: 6px 0 0; color: #7c8593; font-size: .78rem; }
+.shell { position: relative; }
+.lang { position: absolute; top: 16px; right: 16px; display: flex; gap: 4px; }
+.lang-btn { min-height: 32px; padding: 4px 10px; border: 1px solid #d8dde6; border-radius: 8px; background: #fff; color: #596273; font-size: .8rem; font-weight: 650; }
+.lang-btn.active { color: #fff; background: #4358dc; border-color: #4358dc; }
+.hero .privacy { font-size: .9rem; color: #7c8593; }
+.done .status { font-size: .95rem; color: #344054; }
 .controls { flex: none; display: flex; justify-content: space-between; gap: 12px; margin-top: 20px; }
 .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 30px; }
 @media (max-width: 600px) {

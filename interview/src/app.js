@@ -1,22 +1,33 @@
 import { nextQuestion, createReport } from './engine.js';
+import { bundle, languages } from './questions.js';
+import { SUBMIT_URL } from './config.js';
 
 const app = document.querySelector('#app');
-const storageKey = 'okf-interview-demo-v1';
-let answers = [];
-let screen = 'start';
-let mode = 'express';
-let sessionId = crypto.randomUUID();
+const storageKey = 'okf-interview-demo-v2';
+const params = new URLSearchParams(location.search);
+const submitUrl = params.get('submit') || SUBMIT_URL;
+
+function initialLang() {
+  const fromUrl = params.get('lang');
+  if (languages.includes(fromUrl)) return fromUrl;
+  return (navigator.language || '').toLowerCase().startsWith('ru') ? 'ru' : 'en';
+}
+
+function freshState() {
+  return { answers: [], screen: 'start', mode: 'express', sessionId: crypto.randomUUID(), lang: initialLang(), sent: false };
+}
+
+let state = freshState();
 let selected = '';
 
 try {
   const saved = JSON.parse(localStorage.getItem(storageKey) ?? 'null');
-  if (saved && Array.isArray(saved.answers)) {
-    ({ answers, screen, mode, sessionId } = saved);
-  }
+  if (saved && Array.isArray(saved.answers)) state = { ...state, ...saved };
+  if (languages.includes(params.get('lang'))) state.lang = params.get('lang');
 } catch { /* Damaged demo data starts a fresh session. */ }
 
 function save() {
-  localStorage.setItem(storageKey, JSON.stringify({ answers, screen, mode, sessionId }));
+  try { localStorage.setItem(storageKey, JSON.stringify(state)); } catch { /* Private mode: keep going without storage. */ }
 }
 
 function escapeHtml(value) {
@@ -25,44 +36,53 @@ function escapeHtml(value) {
   })[char]);
 }
 
+function langSwitch() {
+  return `<div class="lang" role="group" aria-label="Language">${languages.map((code) => `<button type="button" class="lang-btn${code === state.lang ? ' active' : ''}" data-lang="${code}" aria-pressed="${code === state.lang}">${code.toUpperCase()}</button>`).join('')}</div>`;
+}
+
 function renderStart() {
+  const t = bundle(state.lang).ui;
   app.innerHTML = `<section class="shell hero" aria-labelledby="start-title">
+    ${langSwitch()}
     <div class="hero-content">
-      <h1 id="start-title" class="question-text">Как вы сохраняете важный контекст работы?</h1>
-      <p>Здесь нет правильных ответов. Выбирайте только один вариант — тот, который подходит вам больше всего.</p>
-      <p class="time-note">Не более 3 минут.</p>
-      <button class="primary" id="start">${answers.length ? 'Продолжить' : 'Начать'}</button>
+      <h1 id="start-title" class="question-text">${escapeHtml(t.title)}</h1>
+      <p>${escapeHtml(t.intro)}</p>
+      <p class="privacy">${escapeHtml(t.privacy)}</p>
+      <p class="time-note">${escapeHtml(t.time)}</p>
+      <button class="primary" id="start">${escapeHtml(state.answers.length ? t.resume : t.start)}</button>
     </div>
   </section>`;
-  document.querySelector('#start').onclick = () => { screen = 'interview'; save(); render(); };
+  document.querySelectorAll('.lang-btn').forEach((button) => button.onclick = () => {
+    state.lang = button.dataset.lang; save(); render();
+  });
+  document.querySelector('#start').onclick = () => { state.screen = 'interview'; save(); render(); };
 }
 
 function questionTitle(question) {
   const text = escapeHtml(question.question);
-  return question.id === 'event'
-    ? text.replace('Опишите коротко конкретный случай.', '<br>Опишите коротко конкретный случай.')
-    : text;
+  return question.id === 'event' ? text.replace(/([.?!]) /, '$1<br>') : text;
 }
 
 function renderInterview() {
-  const question = nextQuestion(answers, mode);
-  if (!question) { screen = 'done'; save(); render(); return; }
+  const t = bundle(state.lang).ui;
+  const question = nextQuestion(state.answers, state.mode, state.lang);
+  if (!question) { state.screen = 'done'; save(); render(); return; }
   selected = '';
+  const isText = question.answerType === 'text';
   const options = question.options.map(([value, title]) => `<button type="button" role="radio" aria-checked="false" class="option" data-value="${escapeHtml(value)}"><span class="option-dot"></span><span>${escapeHtml(title)}</span></button>`).join('');
-  app.innerHTML = `<section class="shell interview ${question.answerType === 'text' ? 'text-question' : ''}" aria-labelledby="question-title">
+  app.innerHTML = `<section class="shell interview ${isText ? 'text-question' : ''}" aria-labelledby="question-title">
     <h1 id="question-title" class="question-text">${questionTitle(question)}</h1>
-    <div class="options" role="radiogroup" aria-label="Выберите один вариант ответа">${options}</div>
-    <div class="input-wrap ${question.answerType === 'text' ? '' : 'hidden'}" id="input-wrap">
-      <label for="free-text">Короткий ответ</label><textarea id="free-text" rows="3" maxlength="600" placeholder="Напишите своими словами"></textarea>
-      <p class="hint">Можно пропустить, если не помните подробности.</p>
+    <div class="options" role="radiogroup" aria-label="${escapeHtml(t.pick)}">${options}</div>
+    <div class="input-wrap ${isText ? '' : 'hidden'}" id="input-wrap">
+      <label for="free-text">${escapeHtml(t.shortAnswer)}</label><textarea id="free-text" rows="3" maxlength="600" placeholder="${escapeHtml(t.placeholder)}"></textarea>
+      <p class="hint">${escapeHtml(question.id === 'contact' ? t.contactHint : t.skipHint)}</p>
     </div>
-    <div class="controls"><button class="secondary" id="back">Назад</button><button class="primary" id="next" disabled>Продолжить</button></div>
+    <div class="controls"><button class="secondary" id="back">${escapeHtml(t.back)}</button><button class="primary" id="next" disabled>${escapeHtml(t.next)}</button></div>
   </section>`;
   const input = document.querySelector('#free-text');
   const next = document.querySelector('#next');
   function update() {
-    const text = input.value.trim();
-    next.disabled = question.answerType === 'text' ? !text && !question.optional : !selected;
+    next.disabled = isText ? !input.value.trim() && !question.optional : !selected;
   }
   document.querySelectorAll('.option').forEach((button) => button.onclick = () => {
     selected = button.dataset.value;
@@ -79,12 +99,15 @@ function renderInterview() {
   input.oninput = update;
   next.onclick = () => {
     const raw = input.value.trim();
-    const value = question.answerType === 'text' ? raw || 'Не помню подробности' : selected === 'other' ? (raw || 'Другое') : selected;
-    answers.push({ id: question.id, value });
+    // Ключ варианта всегда сохраняется как есть; свободный текст «Другое» — отдельным полем.
+    const answer = isText ? { id: question.id, value: raw }
+      : selected === 'other' ? { id: question.id, value: 'other', ...(raw ? { text: raw } : {}) }
+        : { id: question.id, value: selected };
+    state.answers.push(answer);
     save(); render();
   };
   document.querySelector('#back').onclick = () => {
-    if (answers.length) answers.pop(); else screen = 'start';
+    if (state.answers.length) state.answers.pop(); else state.screen = 'start';
     save(); render();
   };
   update();
@@ -100,18 +123,45 @@ function downloadReport(report) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+async function sendReport(report) {
+  if (!submitUrl) return 'offline';
+  // text/plain не вызывает preflight. Google Apps Script отвечает с CORS-заголовками, поэтому статус виден;
+  // если сервер их не отдаёт, повторяем без CORS и верим, что запрос дошёл.
+  const request = { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(report) };
+  try {
+    const response = await fetch(submitUrl, request);
+    return response.ok ? 'sent' : 'failed';
+  } catch {
+    try {
+      await fetch(submitUrl, { ...request, mode: 'no-cors' });
+      return 'sent';
+    } catch {
+      return 'failed';
+    }
+  }
+}
+
 function renderDone() {
-  const report = createReport(answers, sessionId, mode);
+  const t = bundle(state.lang).ui;
+  const report = createReport(state.answers, state.sessionId, state.mode, state.lang);
   app.innerHTML = `<section class="shell done" aria-labelledby="done-title">
     <div class="done-content">
-      <h1 id="done-title">Спасибо за ответы</h1>
-      <p>Опрос завершён.</p>
-      <div class="actions"><button class="primary" id="export">Скачать ответы</button>
-        <button class="secondary" id="restart">Начать заново</button></div>
+      <h1 id="done-title">${escapeHtml(t.doneTitle)}</h1>
+      <p>${escapeHtml(t.doneText)}</p>
+      <p class="status" id="status" role="status">${escapeHtml(state.sent ? t.sent : submitUrl ? t.sending : t.offline)}</p>
+      <div class="actions"><button class="primary" id="export">${escapeHtml(t.download)}</button>
+        <button class="secondary" id="restart">${escapeHtml(t.restart)}</button></div>
     </div>
   </section>`;
   document.querySelector('#export').onclick = () => downloadReport(report);
-  document.querySelector('#restart').onclick = () => { answers = []; screen = 'start'; mode = 'express'; sessionId = crypto.randomUUID(); save(); render(); };
+  document.querySelector('#restart').onclick = () => { const { lang } = state; state = { ...freshState(), lang }; save(); render(); };
+  if (!state.sent && submitUrl) {
+    sendReport(report).then((result) => {
+      if (result === 'sent') { state.sent = true; save(); }
+      const status = document.querySelector('#status');
+      if (status) status.textContent = t[result];
+    });
+  }
 }
 
 document.addEventListener('selectstart', (event) => {
@@ -128,9 +178,20 @@ document.addEventListener('dragstart', (event) => {
 });
 
 function render() {
-  if (screen === 'start') renderStart();
-  else if (screen === 'done') renderDone();
-  else renderInterview();
+  document.documentElement.lang = state.lang;
+  document.title = state.lang === 'ru' ? 'Исследование рабочих ситуаций — OKF' : 'Work context survey — OKF';
+  try {
+    if (state.screen === 'start') renderStart();
+    else if (state.screen === 'done') renderDone();
+    else renderInterview();
+  } catch (error) {
+    // Повреждённый или несовместимый сохранённый прогресс не должен оставлять пустой экран.
+    console.error(error);
+    const { lang } = state;
+    state = { ...freshState(), lang };
+    save();
+    renderStart();
+  }
 }
 
 render();
