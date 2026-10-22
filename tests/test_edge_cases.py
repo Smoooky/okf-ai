@@ -13,7 +13,7 @@ import yaml
 from conftest import REPO_ROOT
 from okf.cli import main
 from okf.git import History, changes_since, merge_base
-from okf.instructions import check_repository, discover, is_placeholder
+from okf.instructions import check_repository, discover, is_placeholder, mentions
 from okf.trust import build_map
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
@@ -96,6 +96,43 @@ def test_placeholders_are_not_broken(repo):
 def test_an_existing_placeholder_like_path_is_just_ok(repo):
     repo.write({**CODE, "examples/foo.py": "", "AGENTS.md": "## X\n\n`examples/foo.py`\n"}).commit("2026-09-01T10:00:00Z")
     assert links(repo.units()["AGENTS.md#X"]) == {"examples/foo.py": "ok"}
+
+
+def test_doubtful_and_shortened_paths(repo):
+    repo.write({**CODE, "src/model/time.ts": "", "pkg/a/config/x.go": "", "pkg/b/config/y.go": "", "pkg/keep.go": "",
+                "AGENTS.md": "## Notes\n\nTime helpers: `model/time.ts`. Configs: `config/`. Layers: "
+                             "controller/service/db, `pkg/bindings`, `n/a`, `pid/tid`. Sibling repo: `../skills`. "
+                             "Gone: `model/gone.ts`.\n",
+                "controller/x.py": ""}).commit("2026-09-01T10:00:00Z")
+    unit = repo.units()["AGENTS.md#Notes"]
+    assert links(unit) == {
+        "src/model/time.ts": "ok:suffix",  # shortened: found by its end, used as a source
+        "config/": "unclear",  # two directories end with config/
+        "controller/service/db": "unclear",  # no extension: maybe not a path at all
+        "pkg/bindings": "unclear",
+        "../skills": "unknown",  # outside the repository
+        "model/gone.ts": "broken",
+    }
+    assert [Path(s).name for s in unit.sources] == ["time.ts"]
+
+
+def test_bare_file_names_globs_vendored_and_generated_makefiles(repo):
+    repo.write({
+        **CODE, "docs/05-01-self-configure.md": "", "docs/README.md": "", "README.md": "", "CMakeLists.txt": "",
+        ".cursor/rules/docs.mdc": "[configure](05-01-self-configure.md), [readme](README2.md)\n",
+        "AGENTS.md": "## Notes\n\nOnly `actions/*` actions; tests in `src/*.py`. Build: `make test`.\n",
+        "vendor/github.com/x/y/AGENTS.md": "`src/missing.go`\n",
+    }).commit("2026-09-01T10:00:00Z")
+    units = repo.units()
+    assert links(units[".cursor/rules/docs.mdc"]) == {"docs/05-01-self-configure.md": "ok:suffix", "README2.md": "broken"}
+    assert links(units["AGENTS.md#Notes"]) == {"src/*.py": "ok", "make test": "unknown"}  # `actions/*` is not a path
+    assert not any(name.startswith("vendor/") for name in units)
+
+
+def test_lone_relative_paths_are_paths_scripts_are_commands():
+    found = [(m.kind, m.text) for m in mentions("`../skills`, `./scripts/seed.sh`, `./gradlew`, `./build.sh --fast`\n")]
+    assert found == [("path", "../skills"), ("command", "./scripts/seed.sh"), ("command", "./gradlew"),
+                     ("command", "./build.sh --fast")]
 
 
 # --- 2. Paths ignored by git (build outputs) are "unknown", not broken ---

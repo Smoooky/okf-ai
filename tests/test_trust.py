@@ -123,8 +123,17 @@ def test_sources_come_from_paths_commands_and_links(repo):
     }).commit("2026-09-01T10:00:00Z")
     unit = repo.unit("AGENTS.md#Work")
     assert sorted(Path(s).relative_to(repo.root.resolve()).as_posix() for s in unit.sources) == [
-        "Makefile", "package.json", "src/auth.py", "src/billing.py",  # not the directory, not the glob
+        "src/auth.py", "src/billing.py",  # not the directory, the glob, nor the manifests behind the commands
     ]
+    assert {link["type"]: link["status"] for link in unit.links}["npm-script"] == "ok"  # still checked to exist
+
+
+def test_manifest_changes_do_not_ask_for_a_recheck(repo):
+    code_repo(repo).write({"AGENTS.md": "## Test\n\nRun `npm run test` and `./gradlew build`.\n", "gradlew": "#!/bin/sh\n"})
+    repo.commit("2026-09-01T10:00:00Z")
+    repo.write({"package.json": json.dumps({"scripts": {"test": "pytest -q"}, "dependencies": {"x": "2"}}),
+                "gradlew": "#!/bin/sh\n# 8.10\n"}).commit("2026-10-20T10:00:00Z")
+    assert repo.unit("AGENTS.md#Test").level == "unverified"
 
 
 def test_directory_mentions_do_not_ask_for_rechecks(repo):

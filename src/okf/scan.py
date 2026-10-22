@@ -188,8 +188,9 @@ def _map_repository(spec: RepoSpec, root: Path, now: datetime) -> dict:
 def _clone(spec: RepoSpec, directory: Path, timeout: int) -> str | None:
     """Partial clone with full history but file contents on demand. Returns why it failed, or None."""
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "", "SSH_ASKPASS": "", "GCM_INTERACTIVE": "never"}
+    # core.longpaths: deep trees fail on Windows without it ("Filename too long")
     command = ["git", "-c", "credential.helper=", "clone", "--filter=blob:none", "--no-tags", "--quiet",
-               spec.url, str(directory)]
+               "--config", "core.longpaths=true", spec.url, str(directory)]
     try:
         result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
                                 timeout=timeout, env=env, stdin=subprocess.DEVNULL)
@@ -429,6 +430,8 @@ def _remove(directory: Path) -> None:
         os.chmod(path, stat.S_IWRITE)
         function(path)
 
+    if os.name == "nt" and not str(directory).startswith("\\\\?\\"):
+        directory = Path("\\\\?\\" + str(directory))  # paths longer than 260 characters
     if sys.version_info >= (3, 12):
         shutil.rmtree(directory, onexc=writable)
     else:
