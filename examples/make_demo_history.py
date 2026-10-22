@@ -9,6 +9,7 @@ Copies examples/demo into a new repository and replays a story with fixed dates:
 - 2026-09-01  AGENTS.md, CLAUDE.md and a Cursor rule are written, still naming seed_db.sh
 - 2026-09-05  the team lead verifies AGENTS.md#Auth, the backend lead AGENTS.md#Billing
 - 2026-10-20  src/auth.py changes (lockouts are now logged): Auth needs a recheck
+- (fixtures, not committed) 2026-10-14  Jira epic WHL-42 behind the conversion metric is closed
 - branch pr/billing-tariff, 2026-10-22: the per-minute price goes up in src/billing.py
 
 Then `okf trust` in that repository shows the map, and `okf trust --since main` on the
@@ -48,6 +49,8 @@ def main(argv: list[str] | None = None) -> int:
     print("  git switch pr/billing-tariff && okf trust --since main && git switch main")
     print("  okf fix                                     # mechanical fixes as a diff")
     print("  okf fix --draft --only AGENTS.md#Auth --replay .okf/auth_draft.example.json   # a saved example answer")
+    print("  OKF_SOURCES_FIXTURES=.okf/atlassian-fixtures OKF_CONFLUENCE_URL=https://wheelo.atlassian.net/wiki \\")
+    print("    OKF_JIRA_URL=https://wheelo.atlassian.net okf trust   # Confluence and Jira from hand-written fixtures")
     return 0
 
 
@@ -97,6 +100,8 @@ def build(target: Path) -> None:
     git("checkout", "-q", "main")
     # A hand-written example of a model answer for `okf fix --draft --replay` (not committed).
     shutil.copy(HERE / "demo-pr" / "auth_draft.example.json", target / ".okf" / "auth_draft.example.json")
+    # Hand-written answers in the shape of Confluence and Jira REST, for OKF_SOURCES_FIXTURES (not committed).
+    shutil.copytree(HERE / "atlassian-fixtures", target / ".okf" / "atlassian-fixtures")
 
 
 class _Git:

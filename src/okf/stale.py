@@ -2,29 +2,33 @@
 
 from __future__ import annotations
 
-import fnmatch
-import os
-import re
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import unquote
 
 from okf import schema
-from okf.bundle import SCHEME_RE, Bundle, Document
+from okf.bundle import Bundle, Document
 from okf.report import INFO, WARNING, Issue
+from okf.sources import Registry, registry
+from okf.sources.base import day
+from okf.sources.git import normalize_repo_path, relative_path as _relative, resource_paths, source_matches
+from okf.values import parse_instant
 
-# https://github.com/<owner>/<repo>/blob/<ref>/<path>: the file is <path> in this repository.
-_GITHUB_FILE_RE = re.compile(r"^https?://github\.com/[^/]+/[^/]+/(?:blob|tree)/[^/]+/(?P<path>[^?#]+)")
+__all__ = ["find_stale", "normalize_repo_path", "resource_paths", "source_matches"]
 
 
-def find_stale(bundle: Bundle, changed: list[str], repo_root: Path, now: datetime) -> list[Issue]:
+def find_stale(bundle: Bundle, changed: list[str], repo_root: Path, now: datetime,
+               sources: Registry | None = None) -> list[Issue]:
+    """`changed`: repository paths a change touched. `sources`: connectors for remote resources
+    (Confluence, Jira), configured from the environment by default."""
     repo_root = Path(repo_root).resolve()
+    sources = sources if sources is not None else registry()
     changed_paths = {normalize_repo_path(path) for path in changed if path.strip()}
     issues: list[Issue] = []
     for doc in bundle.concepts():
         if doc.meta is None:
             continue  # broken front matter is reported by `okf validate`
         issues.extend(_changed_sources(doc, bundle, changed_paths, repo_root))
+        issues.extend(_remote_sources(doc, sources))
         expires = schema.stale_after(doc)
         if expires is not None and now >= expires:
             issues.append(
@@ -61,56 +65,35 @@ def _changed_sources(doc: Document, bundle: Bundle, changed_paths: set[str], rep
     return issues
 
 
-def resource_paths(resource: str, doc: Document, bundle_root: Path, repo_root: Path) -> list[str]:
-    """Repository paths a `sources[].resource` may point to.
-
-    `/path` is relative to the bundle root, `./path` and `../path` to the concept file,
-    a bare `path` to either (the official examples write bundle-root paths that way),
-    and a GitHub blob URL names `<path>` in this repository. Other URLs and scope
-    descriptors point nowhere.
-    """
-    match = _GITHUB_FILE_RE.match(resource)
-    if match:
-        return [normalize_repo_path(unquote(match.group("path")))]
-    if SCHEME_RE.match(resource):
-        return []
-    path = unquote(resource.split("#", 1)[0].split("?", 1)[0]).strip()
-    if not path:
-        return []
-    if path.startswith("/"):
-        candidates = [bundle_root / path.lstrip("/")]
-    elif path.startswith(("./", "../")):
-        candidates = [doc.path.parent / path]
-    else:
-        candidates = [doc.path.parent / path, bundle_root / path]
-    result = []
-    for candidate in candidates:
-        relative = _relative(Path(os.path.normpath(candidate)), repo_root)
-        if relative and not relative.startswith("..") and relative not in result:
-            result.append(relative)
-    return result
+def _remote_sources(doc: Document, sources: Registry) -> list[Issue]:
+    """A Confluence page or Jira issue that changed after the document was last verified (or, never
+    verified, after the `last_modified` recorded for it). Unreadable ones are INFO, never errors."""
+    latest = schema.latest_verification(doc)
+    issues = []
+    for entry in _entries(doc):
+        resource = entry["resource"].strip()
+        connector = sources.find(resource)
+        if connector is None or connector is sources.git:
+            continue
+        check = sources.check(resource)
+        if check.status != "ok":
+            issues.append(Issue(INFO, doc.path, "sources", f"Source {resource}: unknown, {check.message}"))
+            continue
+        recorded = parse_instant(entry.get("last_modified"))
+        known = max(filter(None, [latest[0] if latest else None, recorded]), default=None)
+        if check.signal is None or known is None or check.signal.at <= known:
+            continue
+        since = "it was last verified" if latest and known == latest[0] else "its recorded last_modified"
+        issues.append(Issue(WARNING, doc.path, "sources",
+                            f"Source {resource}: {check.signal.subject} {check.signal.verb} {day(check.signal.at)}, "
+                            f"after {since}; document may be outdated{_ask(doc)}", doc.field_line("sources")))
+    return issues
 
 
-def source_matches(pattern: str, changed_path: str) -> bool:
-    """A source is a file, a directory (matches everything under it) or a glob."""
-    if any(ch in pattern for ch in "*?["):
-        return fnmatch.fnmatchcase(changed_path, pattern)
-    pattern = pattern.rstrip("/")
-    return changed_path == pattern or changed_path.startswith(pattern + "/")
-
-
-def normalize_repo_path(path: str) -> str:
-    path = path.strip().replace("\\", "/")
-    while path.startswith("./"):
-        path = path[2:]
-    return path.lstrip("/")
-
-
-def _relative(path: Path, repo_root: Path) -> str:
-    try:
-        return Path(os.path.relpath(path, repo_root)).as_posix()
-    except ValueError:  # another drive on Windows
-        return ""
+def _entries(doc: Document) -> list[dict]:
+    value = doc.get("sources", None)
+    return [e for e in value if isinstance(e, dict) and isinstance(e.get("resource"), str)
+            and e["resource"].strip()] if isinstance(value, list) else []
 
 
 def _ask(doc: Document) -> str:

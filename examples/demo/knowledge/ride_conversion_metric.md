@@ -14,8 +14,12 @@ sources:
     author: human:pm_anna
     usage_count: 340
   - id: definition
-    resource: https://tracker.wheelo.example/browse/WHL-42
-    title: Обсуждение определения сессии
+    resource: https://wheelo.atlassian.net/browse/WHL-42
+    title: "Эпик: определение сессии"
+  - id: metrics-page
+    resource: https://wheelo.atlassian.net/wiki/spaces/WHL/pages/131073/Metriki+produkta
+    title: Метрики продукта в Confluence
+    last_modified: 2026-08-28T12:00:00Z
 usage_window: { from: 2026-08-01T00:00:00Z, to: 2026-08-31T00:00:00Z }
 ---
 

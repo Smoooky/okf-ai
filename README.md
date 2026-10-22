@@ -10,6 +10,8 @@
 - `okf trust` — карта доверия по разделам инструкций и файлам базы знаний; `okf verify` — подтвердить раздел в одно действие;
 - `okf fix` — правки: механические без ИИ (переехавший файл, переименованный скрипт) и черновики от LLM для разделов,
   чей код поменялся (`--draft`, свой ключ); правленое остаётся «не подтверждено», пока человек не сделает `okf verify`;
+- коннекторы Confluence и Jira: закрытый эпик или новая версия страницы просит перепроверить документ;
+  `okf import confluence` переносит страницы в git как документы OKF; свой коннектор — один файл;
 - `okf agents-check` и `okf stale` — страж в PR: битые пути и команды в инструкциях, документы, чей код поменялся;
 - `okf validate` — валидатор базы знаний [OKF v0.2](https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md)
   плюс строгий профиль okf-ai ([спека](etc/spec/cli-validator-v2.md)); `okf agents` — роутер `AGENTS.md` для бандла;
@@ -145,6 +147,111 @@ okf verify --all-current                  # все неподтверждённ�
 **Доверие после правки.** Каждый правленый раздел получает `generated: {by: process:okf-fix | anthropic/<модель>, at}` —
 в `.okf/trust.yml` для инструкций, во frontmatter для OKF — и никогда `verified`. В карте доверия он «не подтверждён»
 (`edited by … ; not verified`), пока человек не сделает `okf verify`: ИИ правит и понижает доверие, человек подтверждает.
+
+## Источники вне git: Confluence и Jira
+
+В `sources[].resource` документа OKF может стоять не только файл, но и страница Confluence или задача Jira.
+`okf trust`, `okf stale` и `okf fix --draft` спрашивают о них коннекторы:
+
+| Коннектор | Ресурсы | Что считается изменением |
+|---|---|---|
+| git | пути (`../src/auth.py`, `/src`), `https://github.com/<owner>/<repo>/blob/<ref>/<path>` | коммит, `git diff` |
+| Confluence | `https://<site>.atlassian.net/wiki/spaces/<KEY>/pages/<id>/...`, `https://<host>/pages/viewpage.action?pageId=<id>`, `confluence://<id>` | новая версия страницы; дифф — текст версии на дату подтверждения против текущей |
+| Jira | `https://<site>.atlassian.net/browse/<KEY-123>`, `jira://<KEY-123>` | задача перешла в Done (из changelog): «закрытый эпик — триггер на актуализацию» |
+
+```text
+[WARNING] knowledge/ride_conversion_metric.md: trust: epic WHL-42 closed 2026-10-14, last verified 2026-09-01 by human:pm_anna
+```
+
+У Jira `fields.updated` двигает каждый комментарий, поэтому перепроверку просит только закрытие; открытая задача
+документ не трогает. Страница, изменённая после подтверждения, — `Confluence page "…" (v14) changed <дата>`.
+`okf stale` сравнивает с `verified` или, если подтверждений нет, с записанным `sources[].last_modified`.
+
+**Настройки — только переменные окружения:**
+- `OKF_CONFLUENCE_URL` (`https://<site>.atlassian.net/wiki` или адрес Server/DC), `OKF_JIRA_URL`;
+- `OKF_ATLASSIAN_EMAIL` + `OKF_ATLASSIAN_TOKEN` для Cloud или `OKF_ATLASSIAN_PAT` для Server/DC;
+- Cloud (`*.atlassian.net`) читается через REST v2 Confluence и v3 Jira, Server/DC — через v1 и v2;
+- `OKF_SOURCES_TIMEOUT` — таймаут запроса в секундах (10).
+
+**Без настроек сеть не трогается вообще.** Ресурс получает статус «unknown: connector not configured: set
+OKF_JIRA_URL», а уровень документа не меняется: ненастроенный коннектор не делает документ «сломанным».
+Так же «unknown», а не «сломано», выходит при 401, 403, 404, таймауте и недоступном хосте: на 429 и 5xx — три
+повтора с паузой (`Retry-After` или 1, 2, 4 с), недоступный хост второй раз не спрашивается. Токены уходят только
+в заголовке и только на хост из `OKF_CONFLUENCE_URL` / `OKF_JIRA_URL`: ссылка на другой сайт — «unknown», без запроса.
+Ни в выводе, ни в ошибках токенов нет.
+
+`okf sources [repo]` показывает, какие коннекторы настроены, и статус каждого удалённого источника.
+
+### `okf import confluence --space KEY [--page ID] --out <bundle>`
+
+Знания из Confluence попадают в git и дальше живут по правилам свежести. Каждая страница становится файлом OKF:
+
+```yaml
+---
+# Written by okf import from Confluence: the body is replaced on the next import.
+type: Guide
+title: Метрики продукта
+description: Imported from Confluence page 131073.
+status: draft
+generated: { by: process:okf-import, at: 2026-10-22T10:00:00Z }
+sources:
+  - id: confluence
+    resource: https://wheelo.atlassian.net/wiki/spaces/WHL/pages/131073/Metriki+produkta
+    title: Метрики продукта
+    last_modified: 2026-08-28T12:00:00Z
+---
+```
+
+- `type` — `Guide`, если тип неизвестен (`--type Runbook` задаёт другой, при повторном импорте тип файла сохраняется);
+- тело — Markdown из storage-формата: заголовки, списки, код (и макрос `code`), ссылки, таблицы; остальное — текстом;
+- `verified` импорт не пишет: в карте доверия файл «не подтверждён», а после новой правки страницы — «перепроверить»;
+- повторный импорт обновляет только файлы, которые написал `okf import` (по id страницы в `sources`), неизменённые
+  страницы не трогает, документ, написанный человеком, не перезаписывает никогда; новые файлы дописываются
+  ссылками в `index.md` (если его нет — создаётся корневой);
+- результат проходит `okf validate`; под `--strict` будут ошибки `verified` и `stale_after` — их ставит человек.
+
+### Как добавить коннектор
+
+Один файл в `src/okf/sources/` с подклассом `Source` и одна строка в реестре. Минимальный пример — страницы
+внутренней вики `wiki://<id>`:
+
+```python
+# src/okf/sources/mywiki.py
+from okf.sources.base import Source, Unavailable, not_configured, parse_time
+
+
+class MyWikiSource(Source):
+    name = "mywiki"
+    settings = "OKF_MYWIKI_URL"
+
+    def matches(self, resource):
+        return resource.startswith("wiki://")
+
+    def unconfigured(self):  # без настроек: "unknown", и сеть не трогается
+        return None if self.env.get("OKF_MYWIKI_URL") else not_configured(self.settings)
+
+    def last_modified(self, resource):
+        page = self.http.get_json(f"{self.env['OKF_MYWIKI_URL']}/api/pages/{resource[7:]}")
+        return parse_time(page.get("updated_at"))  # ошибки HTTP сами станут Unavailable → "unknown"
+
+    def changes_since(self, resource, since):
+        return None  # или дифф/описание изменений для okf fix --draft
+
+    def describe(self, resource):
+        return f"wiki page {resource[7:]}"
+```
+
+```python
+# src/okf/sources/__init__.py
+from okf.sources.mywiki import MyWikiSource
+
+CONNECTORS: list[type[Source]] = [ConfluenceSource, JiraSource, MyWikiSource]
+```
+
+Что даёт база: `self.env` — настройки, `self.http.get_json(url, headers)` — таймауты, повторы на 429, фикстуры
+и ошибки как `Unavailable`. `signal(resource)` по умолчанию — «изменён в `last_modified`»; переопределите,
+если перепроверку должно просить другое событие (так сделан Jira: только закрытие). Реестр отдаёт ресурс первому
+коннектору, чей `matches` вернул `True`; git идёт последним и берёт все пути.
 
 ## `okf agents-check [repo] [--strict] [--changed FILE...] [--base REF]`
 
@@ -287,6 +394,9 @@ okf scan --score report/label.csv       # точность связей посл
 5. `okf validate $OKF_BUNDLE --strict` и `okf stale --base ...` — база знаний;
 6. отчёт в лог, в job summary и аннотациями на строки; в PR из этого же репозитория — обновляемым комментарием.
 
+Коннекторы Confluence и Jira — по желанию: переменные `OKF_CONFLUENCE_URL`, `OKF_JIRA_URL`, `OKF_ATLASSIAN_EMAIL`
+и секреты `OKF_ATLASSIAN_TOKEN` или `OKF_ATLASSIAN_PAT`. Без них шаги работают как раньше и в сеть не ходят.
+
 Ошибки валят проверку, предупреждения — нет. Чтобы подключить к своему репозиторию, скопируйте файл
 и поменяйте `OKF_REPO` (обычно `.`) и `OKF_BUNDLE`; `OKF_AGENTS_ARGS: --strict` сделает битые ссылки в инструкциях ошибками.
 
@@ -403,6 +513,36 @@ okf trust: 16 units: 12 verified and current, 0 to recheck, 0 broken, 4 not veri
 
 Код выхода `0`. `okf verify --all-current` подтвердит и оставшиеся четыре, где код не менялся.
 
+**5. Знания из Confluence и Jira.** Метрика конверсии ссылается на эпик WHL-42 и страницу Confluence. Без настроек
+они «unknown» и уровень не меняют. Настоящего Atlassian на демо нет, поэтому подставляем **фикстуры, написанные
+вручную** в форме ответов REST ([`examples/atlassian-fixtures`](examples/atlassian-fixtures), в демо-репозитории —
+`.okf/atlassian-fixtures`): эпик WHL-42 закрыт 14 октября, после того как продакт подтвердила документ 1 сентября.
+
+```bash
+export OKF_SOURCES_FIXTURES=.okf/atlassian-fixtures
+export OKF_CONFLUENCE_URL=https://wheelo.atlassian.net/wiki OKF_JIRA_URL=https://wheelo.atlassian.net
+okf trust --strict
+```
+
+```text
+okf trust: 16 units: 11 verified and current, 1 to recheck, 0 broken, 4 not verified
+[WARNING] knowledge/ride_conversion_metric.md: trust: epic WHL-42 closed 2026-10-14, last verified 2026-09-01 by human:pm_anna
+```
+
+Код выхода `1`: документ всё ещё пишет «определение сессии ещё обсуждается». И перенос страниц в git:
+
+```bash
+okf import confluence --space WHL --out knowledge
+okf validate knowledge
+```
+
+```text
+okf import: new: knowledge/metriki_produkta.md (page 131073 v7, 2026-08-28)
+okf import: new: knowledge/tarify_i_billing.md (page 131074 v3, 2026-10-03)
+okf import: 2 pages from space WHL, 2 written to knowledge; they stay not verified until okf verify
+okf validate (okf): 14 files, 0 errors, 0 warnings
+```
+
 ### Страж в PR: инструкции агентов (1 минута)
 
 В самом репозитории okf-ai, на `examples/demo`:
@@ -440,7 +580,8 @@ okf validate examples/demo/knowledge --strict && okf agents examples/demo/knowle
 
 ```text
 src/okf/        trust.py (карта доверия, verify), fix.py (правки и черновики), scan.py (проба), instructions.py (agents-check), schema.py (поля и правила OKF,
-                профили okf и strict), validate.py, stale.py, agents.py, bundle.py, git.py, cli.py
+                профили okf и strict), importer.py (okf import), validate.py, stale.py, agents.py, bundle.py, git.py, cli.py
+src/okf/sources/ коннекторы: base.py (интерфейс Source), git.py, confluence.py, jira.py, http.py (запросы, фикстуры)
 tests/          pytest; fixtures/okf-official — официальный пример acme_retail (Apache-2.0)
 examples/       demo (мини-репозиторий + knowledge/), make_demo_history.py, demo-pr, broken
 etc/            бриф, спеки (v1 и v2), конкурентный анализ, интервью-кит

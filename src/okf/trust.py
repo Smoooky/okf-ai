@@ -31,7 +31,7 @@ from okf.instructions import (
     DOCUMENT_SUFFIXES, FENCE_INFO_RE, SKIP_DIRS, InstructionFile, Repository, discover, front_matter_end,
     instruction_scope, references,
 )
-from okf.stale import resource_paths
+from okf.sources import Check, Registry, registry
 from okf.values import parse_instant
 
 LEVELS = ("broken", "recheck", "human-verified", "process-verified", "unverified")
@@ -72,6 +72,7 @@ class Unit:
     moved: list[tuple[str, str, datetime | None]] = field(default_factory=list)  # (as written, new path, when)
     broken_types: list[str] = field(default_factory=list)
     links: list[dict] = field(default_factory=list)  # every reference, for okf scan and --json
+    remote: list[Check] = field(default_factory=list)  # Confluence pages, Jira issues, other URLs in `sources`
     end: int = 0
     reason: str = ""  # a short code for statistics, e.g. "broken:npm-script", "recheck:moved"
 
@@ -107,13 +108,14 @@ class TrustMap:
 
 def build_map(root: Path, history: History, changes: list[Change] | None = None,
               bundles: list[Path] | None = None, now: datetime | None = None,
-              base_commit: str | None = None) -> TrustMap:
+              base_commit: str | None = None, sources: Registry | None = None) -> TrustMap:
     """The trust map of `root`. With `changes` (and the `base_commit` they start from), also what a
-    pull request changed; a section or document the same change edited is not asked to be rechecked."""
+    pull request changed; a section or document the same change edited is not asked to be rechecked.
+    `sources`: connectors for remote resources, configured from the environment by default."""
     root = Path(root).resolve()
     now = now or datetime.now(timezone.utc)
     instructions, notes = instruction_units(root, history)
-    units = instructions + knowledge_units(root, history, bundles)
+    units = instructions + knowledge_units(root, history, bundles, sources)
     changed = None if changes is None else set(changed_paths(changes))
     if changed is not None:
         _mark_updated(units, history, changed, base_commit)
@@ -210,7 +212,9 @@ def _link(reference, lines: list[str], root: Path) -> dict:
     return {"line": reference.line, "type": reference.type, "status": status, "source": source, "text": text[:240]}
 
 
-def knowledge_units(root: Path, history: History, bundles: list[Path] | None = None) -> list[Unit]:
+def knowledge_units(root: Path, history: History, bundles: list[Path] | None = None,
+                    sources: Registry | None = None) -> list[Unit]:
+    sources = sources if sources is not None else registry(root=root, history=history)
     units = []
     for path, bundle_root in _concepts(root, bundles):
         doc = load_document(path, bundle_root)
@@ -220,9 +224,13 @@ def knowledge_units(root: Path, history: History, bundles: list[Path] | None = N
         for resource in schema.sources(doc):
             if any(ch.isspace() for ch in resource):
                 continue  # a scope descriptor, not a path
-            candidates = [root / p for p in resource_paths(resource, doc, bundle_root, root)]
+            connector = sources.find(resource)
+            if connector is not sources.git:
+                unit.remote.append(sources.check(resource))  # status "unknown" without a configured connector
+                continue
+            candidates = [root / p for p in sources.git.paths(resource, doc, bundle_root, root)]
             if not candidates:
-                continue  # an URL
+                continue
             unit.touched.extend(candidates)
             existing = [c for c in candidates if c.exists()]
             moved = None if existing else next(filter(None, (history.moved(c) for c in candidates)), None)
@@ -287,10 +295,24 @@ def section_hash(lines: list[str]) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
 
 
+@dataclass
+class _Dated:
+    """A source and the moment it last changed: a file, a Confluence page, a closed Jira epic."""
+
+    label: str
+    at: datetime
+    verb: str = "changed"
+    reason: str = "recheck:code-changed"
+    path: Path | None = None  # a file of this repository
+
+    def says(self) -> str:
+        return f"{self.label} {self.verb} {_day(self.at)}"
+
+
 def _evaluate(unit: Unit, root: Path, history: History, changed: set[str] | None, now: datetime) -> None:
-    dated = [(s, history.last_change(s)) for s in unit.sources]
-    dated = [(s, d) for s, d in dated if d is not None]
-    newest = max(dated, key=lambda item: item[1]) if dated else None
+    dated = [_Dated(_show(s, root), d, path=s) for s in unit.sources if (d := history.last_change(s)) is not None]
+    dated += [_Dated(r.signal.subject, r.signal.at, r.signal.verb, r.signal.reason) for r in unit.remote if r.signal]
+    newest = max(dated, key=lambda item: item.at) if dated else None
     latest = max(unit.verifications, default=None)
     last = f"last verified {_day(latest[0])} by {latest[1]}" if latest else "never verified"
 
@@ -315,12 +337,19 @@ def _evaluate(unit: Unit, root: Path, history: History, changed: set[str] | None
         return result("recheck", f"{', '.join(unit.in_change)} changed in this change; {last}", "recheck:in-change")
     machine = unit.generated_by and not schema.is_human(unit.generated_by)
     if machine and unit.generated_at and (latest is None or unit.generated_at > latest[0]):
-        # okf fix or an LLM draft rewrote it: lower trust until a person confirms (okf verify)
+        # okf fix, an LLM draft or okf import wrote it: lower trust until a person confirms (okf verify)
         since = f", {last}" if latest else ""
+        later = [d for d in dated if d.at > unit.generated_at]
+        if later:  # and its source moved on after that
+            unit.changed = [(d.label, d.at) for d in later if d.path]
+            source = max(later, key=lambda d: d.at)
+            return result("recheck", f"{source.says()}, after {unit.generated_by} wrote it on "
+                          f"{_day(unit.generated_at)}; not verified{since}", source.reason)
         return result("unverified", f"edited by {unit.generated_by} on {_day(unit.generated_at)}; not verified{since}",
                       "unverified:generated")
     if latest is not None:
-        unit.changed = [(_show(s, root), d) for s, d in dated if d > latest[0]]
+        newer = [d for d in dated if d.at > latest[0]]
+        unit.changed = [(d.label, d.at) for d in newer if d.path]
         if unit.recorded_hash and unit.text_hash and unit.recorded_hash != unit.text_hash:
             return result("recheck", f"section edited after it was verified; {last}", "recheck:edited")
         if unit.generated_at and unit.generated_at > latest[0]:
@@ -328,30 +357,39 @@ def _evaluate(unit: Unit, root: Path, history: History, changed: set[str] | None
                           "recheck:regenerated")
         if unit.stale_after and now >= unit.stale_after:
             return result("recheck", f"stale_after {_day(unit.stale_after)} has passed; {last}", "recheck:stale-after")
-        if unit.changed:
-            source, day = max(unit.changed, key=lambda item: item[1])
-            return result("recheck", f"{source} changed {_day(day)}, {last}", "recheck:code-changed")
+        if newer:
+            source = max(newer, key=lambda d: d.at)
+            return result("recheck", f"{source.says()}, {last}", source.reason)
         humans = [v for v in unit.verifications if schema.is_human(v[1])]
         human = max(humans, default=None)
-        verified = human if human and (newest is None or human[0] >= newest[1]) else None
+        verified = human if human and (newest is None or human[0] >= newest.at) else None
         level = "human-verified" if verified else "process-verified"
         verified = verified or latest
         return result(level, f"verified {_day(verified[0])} by {verified[1]}" + _sources_note(unit), "verified")
     if unit.stale_after and now >= unit.stale_after:
         return result("recheck", f"stale_after {_day(unit.stale_after)} has passed; never verified",
                       "recheck:stale-after")
-    if newest and unit.last_edited and newest[1] > unit.last_edited:
-        unit.changed = [(_show(s, root), d) for s, d in dated if d > unit.last_edited]
+    if newest and unit.last_edited and newest.at > unit.last_edited:
+        unit.changed = [(d.label, d.at) for d in dated if d.path and d.at > unit.last_edited]
         what = "section" if unit.kind == "instruction" else "file"
-        return result("recheck", f"{_show(newest[0], root)} changed {_day(newest[1])}, "
-                      f"{what} last edited {_day(unit.last_edited)} and never verified", "recheck:code-changed")
+        return result("recheck", f"{newest.says()}, {what} last edited {_day(unit.last_edited)} and never verified",
+                      newest.reason)
     edited = f"; last edited {_day(unit.last_edited)}" if unit.last_edited else ""
-    reason = "unverified" if unit.sources else "unverified:no-sources"
+    reason = "unverified" if unit.sources or _readable(unit) else "unverified:no-sources"
     return result("unverified", f"not verified{edited}" + _sources_note(unit), reason)
 
 
+def _readable(unit: Unit) -> list[Check]:
+    return [r for r in unit.remote if r.status == "ok"]
+
+
 def _sources_note(unit: Unit) -> str:
-    return "; sources unchanged since" if unit.sources else "; no code references found"
+    note = "; sources unchanged since" if unit.sources or _readable(unit) else "; no code references found"
+    unknown = [r for r in unit.remote if r.actionable]
+    if unknown:
+        more = f" (and {len(unknown) - 1} more)" if len(unknown) > 1 else ""
+        note += f"; {unknown[0].resource}: unknown, {unknown[0].message}{more}"
+    return note
 
 
 def unit_json(unit: Unit, root: Path) -> dict:
@@ -376,6 +414,10 @@ def unit_json(unit: Unit, root: Path) -> dict:
         "verified": [{"by": by, "at": stamp(at)} for at, by in sorted(unit.verifications)],
         "last_edited": stamp(unit.last_edited),
         "links": unit.links,
+        "remote": [{"resource": r.resource, "connector": r.connector, "status": r.status, "message": r.message,
+                    "last_modified": stamp(r.last_modified),
+                    "signal": {"what": f"{r.signal.subject} {r.signal.verb}", "at": stamp(r.signal.at)}
+                    if r.signal else None} for r in unit.remote],
     }
 
 

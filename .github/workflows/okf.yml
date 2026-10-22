@@ -33,6 +33,10 @@ jobs:
       pull-requests: write  # sticky PR comment with the report
     env:
       BASE_REF: ${{ github.base_ref }}
+      # Optional connectors for Confluence pages and Jira issues in `sources`: without them nothing
+      # changes and nothing is requested; with them, a closed epic or an edited page asks for a recheck.
+      OKF_CONFLUENCE_URL: ${{ vars.OKF_CONFLUENCE_URL }}
+      OKF_JIRA_URL: ${{ vars.OKF_JIRA_URL }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -49,6 +53,10 @@ jobs:
           fi
 
       - name: okf trust
+        env:
+          OKF_ATLASSIAN_EMAIL: ${{ vars.OKF_ATLASSIAN_EMAIL }}
+          OKF_ATLASSIAN_TOKEN: ${{ secrets.OKF_ATLASSIAN_TOKEN }}
+          OKF_ATLASSIAN_PAT: ${{ secrets.OKF_ATLASSIAN_PAT }}
         run: |  # in a PR: the sections this change makes to recheck; on push: the whole map
           okf trust "$OKF_REPO" $OKF_SINCE_ARGS --format github 2> /dev/null
           okf trust "$OKF_REPO" $OKF_SINCE_ARGS > trust.txt 2> trust-summary.txt
@@ -60,6 +68,9 @@ jobs:
           OKF_LLM_API_KEY: ${{ secrets.OKF_LLM_API_KEY }}
           OKF_LLM_BASE_URL: ${{ vars.OKF_LLM_BASE_URL }}
           OKF_LLM_MODEL: ${{ vars.OKF_LLM_MODEL }}
+          OKF_ATLASSIAN_EMAIL: ${{ vars.OKF_ATLASSIAN_EMAIL }}
+          OKF_ATLASSIAN_TOKEN: ${{ secrets.OKF_ATLASSIAN_TOKEN }}
+          OKF_ATLASSIAN_PAT: ${{ secrets.OKF_ATLASSIAN_PAT }}
         run: |  # proposals only: this workflow never commits or opens a pull request
           draft=""
           if [ -n "$ANTHROPIC_API_KEY" ] || [ -n "$OKF_LLM_API_KEY" ]; then draft="--draft"; fi
@@ -86,6 +97,10 @@ jobs:
           cat validate.txt validate-summary.txt
 
       - name: okf stale
+        env:
+          OKF_ATLASSIAN_EMAIL: ${{ vars.OKF_ATLASSIAN_EMAIL }}
+          OKF_ATLASSIAN_TOKEN: ${{ secrets.OKF_ATLASSIAN_TOKEN }}
+          OKF_ATLASSIAN_PAT: ${{ secrets.OKF_ATLASSIAN_PAT }}
         run: |
           okf stale "$OKF_BUNDLE" $OKF_BASE_ARGS --format github 2> /dev/null
           okf stale "$OKF_BUNDLE" $OKF_BASE_ARGS > stale.txt 2> stale-summary.txt

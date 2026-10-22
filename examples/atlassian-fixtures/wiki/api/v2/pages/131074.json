@@ -1,0 +1,24 @@
+{
+  "id": "131074",
+  "status": "current",
+  "title": "Тарифы и биллинг",
+  "spaceId": "98305",
+  "parentId": "98400",
+  "version": {
+    "number": 3,
+    "message": "",
+    "minorEdit": false,
+    "authorId": "5f1a00demo",
+    "createdAt": "2026-10-03T09:00:00.000Z"
+  },
+  "body": {
+    "storage": {
+      "value": "<p>Поминутный тариф — <strong>9 ₽</strong> в минуту, холд при старте 300 ₽.</p><ul><li>Ночью (00:00–06:00) — 7 ₽ в минуту.</li></ul>",
+      "representation": "storage"
+    }
+  },
+  "_links": {
+    "webui": "/spaces/WHL/pages/131074/Tarify+i+billing",
+    "base": "https://wheelo.atlassian.net/wiki"
+  }
+}

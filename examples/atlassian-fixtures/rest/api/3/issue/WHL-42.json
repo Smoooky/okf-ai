@@ -1,0 +1,86 @@
+{
+  "id": "10042",
+  "key": "WHL-42",
+  "self": "https://wheelo.atlassian.net/rest/api/3/issue/10042",
+  "fields": {
+    "summary": "Определение сессии для метрики конверсии",
+    "issuetype": {
+      "name": "Epic"
+    },
+    "status": {
+      "name": "Done",
+      "statusCategory": {
+        "key": "done",
+        "name": "Done"
+      }
+    },
+    "updated": "2026-10-16T08:12:00.000+0300",
+    "resolutiondate": "2026-10-14T17:30:00.000+0300"
+  },
+  "changelog": {
+    "startAt": 0,
+    "maxResults": 3,
+    "total": 3,
+    "histories": [
+      {
+        "id": "20001",
+        "author": {
+          "displayName": "Анна (PM)"
+        },
+        "created": "2026-09-03T11:00:00.000+0300",
+        "items": [
+          {
+            "field": "status",
+            "fieldtype": "jira",
+            "from": null,
+            "fromString": "To Do",
+            "to": null,
+            "toString": "In Progress"
+          }
+        ]
+      },
+      {
+        "id": "20002",
+        "author": {
+          "displayName": "Анна (PM)"
+        },
+        "created": "2026-10-14T17:30:00.000+0300",
+        "items": [
+          {
+            "field": "status",
+            "fieldtype": "jira",
+            "from": null,
+            "fromString": "In Progress",
+            "to": null,
+            "toString": "Done"
+          },
+          {
+            "field": "resolution",
+            "fieldtype": "jira",
+            "from": null,
+            "fromString": null,
+            "to": null,
+            "toString": "Done"
+          }
+        ]
+      },
+      {
+        "id": "20003",
+        "author": {
+          "displayName": "Мария (backend)"
+        },
+        "created": "2026-10-16T08:12:00.000+0300",
+        "items": [
+          {
+            "field": "labels",
+            "fieldtype": "jira",
+            "from": null,
+            "fromString": "",
+            "to": null,
+            "toString": "metrics"
+          }
+        ]
+      }
+    ]
+  }
+}

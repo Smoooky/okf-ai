@@ -29,9 +29,10 @@ from pathlib import Path, PurePosixPath
 
 from okf import schema
 from okf.bundle import load_document
-from okf.git import Change, History, commit_at, commits_changing_count, diff_since, file_at
+from okf.git import Change, History, commits_changing_count, file_at
 from okf.instructions import InstructionFile, Repository, discover, front_matter_end, references
-from okf.stale import resource_paths
+from okf.sources import Registry, registry
+from okf.sources.git import resource_paths
 from okf.trust import (
     ROUTER_MARK, SIDECAR, Sidecar, TrustMap, _concepts, _relative, _unit_name, find_sidecar, section_hash, sections,
     set_generated,
@@ -41,7 +42,7 @@ FIX_ACTOR = "process:okf-fix"
 DEFAULT_MODEL = "claude-opus-5-5"
 # Models that take server-side refusal fallbacks (`fallbacks: "default"`).
 FALLBACK_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5"}
-DRAFT_REASONS = {"recheck:code-changed", "recheck:in-change"}
+DRAFT_REASONS = {"recheck:code-changed", "recheck:in-change", "recheck:source-changed", "recheck:closed"}
 KEY_HELP = ("set ANTHROPIC_API_KEY, or OKF_LLM_BASE_URL + OKF_LLM_API_KEY + OKF_LLM_MODEL for an "
             "OpenAI-compatible endpoint")
 DRAFT_SCHEMA = {
@@ -386,11 +387,15 @@ def provider_from_env(env: dict | None = None) -> Provider | None:
 
 
 def plan_drafts(plan: FixPlan, trust_map: TrustMap, history: History, provider: Provider,
-                only: list[str] | None = None, base_commit: str | None = None, max_diff: int = 40000) -> None:
+                only: list[str] | None = None, base_commit: str | None = None, max_diff: int = 40000,
+                sources: Registry | None = None) -> None:
     """Ask the model for every section whose code changed since it was confirmed (or, in a pull
-    request, in this change), and keep only drafts that pass the checks."""
+    request, in this change), and keep only drafts that pass the checks. What changed comes from
+    the connectors: `git diff` for files, page versions for Confluence, the changelog for Jira."""
     wanted = set(only or [])
     repository = Repository(plan.root, history)
+    sources = sources if sources is not None else registry(root=plan.root, history=history)
+    git = sources.git if sources.git.history is not None else registry(root=plan.root, history=history).git
     for unit in trust_map.units:
         if unit.reason not in DRAFT_REASONS or (wanted and unit.name not in wanted):
             continue
@@ -406,14 +411,22 @@ def plan_drafts(plan: FixPlan, trust_map: TrustMap, history: History, provider: 
         draft = Draft(unit.path, unit.name, unit.kind, start, end, by=provider.actor)
         plan.drafts.append(draft)
         changed = sorted({p for p, _ in unit.changed} | set(unit.in_change))
-        relatives = [history.relative(plan.root / p) for p in changed]
+        relatives = [r for p in changed if (r := history.relative(plan.root / p))]
+        moment = max(unit.verifications)[0] if unit.verifications else unit.last_edited
+        if unit.generated_at and (moment is None or unit.generated_at > moment):
+            moment = unit.generated_at  # okf import or an earlier draft wrote it: what changed after that
         if base_commit and unit.in_change:
             since_commit, since = base_commit, "the base of this change"
         else:
-            moment = max(unit.verifications)[0] if unit.verifications else unit.last_edited
-            since_commit = commit_at(history.root, moment) if moment else base_commit or ""
+            since_commit = moment or base_commit or ""
             since = moment.astimezone(timezone.utc).date().isoformat() if moment else "the beginning"
-        diff = diff_since(history.root, since_commit, [r for r in relatives if r])
+        diff = (git.changes_since(relatives, since_commit) or "") if relatives else ""
+        remote = [r for r in unit.remote if r.signal and (moment is None or r.signal.at > moment)]
+        for check in remote:
+            text = sources.changes_since(check.resource, moment) if moment else None
+            if text:
+                diff += ("\n\n" if diff else "") + text
+                changed.append(check.message)
         if not diff.strip():
             draft.rejected = "no diff of the changed sources to show the model"
             continue

@@ -1,4 +1,4 @@
-"""Command line: okf trust | fix | verify | agents-check | stale | validate | agents | scan."""
+"""Command line: okf trust | fix | verify | import | sources | agents-check | stale | validate | agents | scan."""
 
 from __future__ import annotations
 
@@ -14,11 +14,15 @@ from okf.bundle import Bundle
 from okf.report import ERROR, INFO, WARNING, Issue, display_path, format_issue
 from okf.git import SHALLOW_HINT, Change, GitError, History, changed_paths, changes_since, merge_base, toplevel
 from okf.fix import KEY_HELP, FixError, ReplayProvider, apply, plan_drafts, plan_fixes, provider_from_env, render
+from okf.importer import import_confluence
 from okf.instructions import check_repository
 from okf.scan import ScanError, find_repos, parse_repos, scan, score
 from okf.schema import get_profile
+from okf.sources import Unavailable, registry
+from okf.sources.base import day
+from okf.sources.confluence import ConfluenceSource
 from okf.stale import find_stale, normalize_repo_path
-from okf.trust import TrustError, build_map, default_actor, unit_json, verify, verify_units
+from okf.trust import TrustError, build_map, default_actor, knowledge_units, unit_json, verify, verify_units
 from okf.validate import has_errors, validate_bundle
 from okf.values import parse_now
 
@@ -32,16 +36,19 @@ def main(argv: list[str] | None = None) -> int:
         return _verify(args)
     if args.command == "scan":
         return _scan(args)
+    if args.command == "import":
+        return _import(args)
     if args.command == "fix":
         if not Path(args.repo).is_dir():
             print(f"okf: error: directory not found: {args.repo}", file=sys.stderr)
             return 2
         return _fix(args)
-    if args.command in ("agents-check", "trust"):
+    if args.command in ("agents-check", "trust", "sources"):
         if not Path(args.repo).is_dir():
             print(f"okf: error: directory not found: {args.repo}", file=sys.stderr)
             return 2
-        return _agents_check(args) if args.command == "agents-check" else _trust(args)
+        handlers = {"agents-check": _agents_check, "trust": _trust, "sources": _sources}
+        return handlers[args.command](args)
     bundle_dir = Path(args.bundle)
     if not bundle_dir.is_dir():
         print(f"okf: error: bundle directory not found: {args.bundle}", file=sys.stderr)
@@ -88,6 +95,21 @@ def _parser() -> argparse.ArgumentParser:
     verify_parser.add_argument("--all-current", action="store_true",
                                help="confirm every not yet verified instruction section whose code did not change")
     verify_parser.add_argument("--repo", default=".", help="where --all-current looks (default: .)")
+
+    importer = commands.add_parser("import", help="bring knowledge from Confluence into git as OKF documents")
+    importer.add_argument("system", choices=["confluence"], help="where from")
+    importer.add_argument("--space", metavar="KEY", help="every page of this space")
+    importer.add_argument("--page", action="append", default=[], metavar="ID", help="only this page (repeatable)")
+    importer.add_argument("--out", required=True, metavar="DIR", help="bundle directory to write to")
+    importer.add_argument("--type", metavar="TYPE", help="OKF type of new documents (default: the file's, else Guide)")
+    importer.add_argument("--limit", type=int, default=200, help="at most this many pages (default: 200)")
+    _add_now(importer)
+
+    sources_parser = commands.add_parser("sources", help="connectors (Confluence, Jira) and the remote sources "
+                                         "of the knowledge, with their status")
+    sources_parser.add_argument("repo", nargs="?", default=".", help="repository or directory (default: .)")
+    sources_parser.add_argument("--bundle", action="append", default=[], metavar="DIR",
+                                help="OKF bundle (default: every .md with a type in its front matter)")
 
     scan_parser = commands.add_parser("scan", help="probe: the trust map over many public GitHub repositories")
     mode = scan_parser.add_mutually_exclusive_group(required=True)
@@ -280,7 +302,8 @@ def _fix(args: argparse.Namespace) -> int:
             print(f"okf: error: {exc}", file=sys.stderr)
             return 2
     history = History(git_root, now)
-    trust_map = build_map(root, history, changes, None, now, base_commit)
+    sources = registry(root=root, history=history)
+    trust_map = build_map(root, history, changes, None, now, base_commit, sources)
     plan = plan_fixes(root, history, trust_map, changes, args.only)
     if args.draft or args.replay:
         try:
@@ -291,7 +314,7 @@ def _fix(args: argparse.Namespace) -> int:
         if provider is None:
             print(f"okf fix: no LLM key, so no drafts: {KEY_HELP}; showing the mechanical fixes only", file=sys.stderr)
         else:
-            plan_drafts(plan, trust_map, history, provider, args.only, base_commit, args.max_diff)
+            plan_drafts(plan, trust_map, history, provider, args.only, base_commit, args.max_diff, sources)
     mechanical, drafted = render(plan)
     sys.stdout.write(mechanical + drafted)
     sys.stdout.flush()
@@ -343,6 +366,55 @@ def _verify(args: argparse.Namespace) -> int:
         print(f"okf verify: {name} verified by {by} at {stamp}", file=sys.stderr)
     if not names:
         print("okf verify: nothing to verify", file=sys.stderr)
+    return 0
+
+
+def _import(args: argparse.Namespace) -> int:
+    if not args.space and not args.page:
+        print("okf: error: name a space (--space KEY) or pages (--page ID)", file=sys.stderr)
+        return 2
+    connector = next(c for c in registry().connectors if isinstance(c, ConfluenceSource))
+    problem = connector.unconfigured()
+    if problem:
+        print(f"okf import: {problem}", file=sys.stderr)
+        return 2
+    out = Path(args.out)
+    try:
+        done = import_confluence(connector, out, args.space, args.page, args.type, args.limit, _now(args))
+    except Unavailable as exc:
+        print(f"okf import: Confluence: {exc}", file=sys.stderr)
+        return 1
+    for item in done:
+        at = f", {day(item.page.at)}" if item.page.at else ""
+        print(f"okf import: {item.action}: {display_path(item.path)} (page {item.page.id} v{item.page.version}{at})",
+              file=sys.stderr)
+    written = sum(item.action != "unchanged" for item in done)
+    where = f"space {args.space}" if args.space and not args.page else "Confluence"
+    after = "; they stay not verified until okf verify" if written else ""
+    print(f"okf import: {len(done)} pages from {where}, {written} written to {display_path(out)}{after}",
+          file=sys.stderr)
+    return 0
+
+
+def _sources(args: argparse.Namespace) -> int:
+    root = Path(args.repo).resolve()
+    sources = registry(root=root)
+    for connector in sources.connectors:
+        state = connector.unconfigured() or f"configured ({getattr(connector, 'base', '')})"
+        print(f"okf sources: {connector.name}: {state}", file=sys.stderr)
+    units = knowledge_units(root, History(toplevel(root)), [Path(b) for b in args.bundle] or None, sources)
+    count = 0
+    for unit in units:
+        for check in unit.remote:
+            if check.connector is None:
+                continue
+            count += 1
+            signal = f"; {check.signal.subject} {check.signal.verb} {day(check.signal.at)}" if check.signal else ""
+            label = "OK" if check.status == "ok" else INFO
+            print(f"[{label}] {display_path(unit.path)}: {check.connector}: {check.resource}: "
+                  f"{check.status}, {check.message}{signal}")
+    sys.stdout.flush()
+    print(f"okf sources: {count} remote sources with a connector", file=sys.stderr)
     return 0
 
 
@@ -417,7 +489,7 @@ def _stale(args: argparse.Namespace, bundle: Bundle) -> int:
     issues = find_stale(bundle, changed, repo_root, _now(args))
     _print(issues, args.format)
     outdated = len({issue.path for issue in issues if issue.field == "sources" and issue.level == WARNING})
-    updated = len({issue.path for issue in issues if issue.level == INFO})
+    updated = len({issue.path for issue in issues if issue.level == INFO and "same change" in issue.message})
     expired = sum(issue.field == "stale_after" for issue in issues)
     print(
         f"okf stale: {len(set(changed))} changed files, {outdated} documents may be outdated, "

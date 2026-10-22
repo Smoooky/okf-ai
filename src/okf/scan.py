@@ -31,6 +31,7 @@ from typing import Callable
 
 from okf.git import History
 from okf.instructions import discover
+from okf.sources import registry
 from okf.trust import build_map, unit_json
 
 LABEL_COLUMNS = ["repo", "file", "line", "section", "source", "type", "extracted_from", "status", "correct",
@@ -138,7 +139,7 @@ def scan_one(spec: RepoSpec, now: datetime, timeout: int, work: Path | None, kee
 def _map_repository(spec: RepoSpec, root: Path, now: datetime) -> dict:
     root = root.resolve()
     history = History(root, now)
-    trust_map = build_map(root, history, now=now)
+    trust_map = build_map(root, history, now=now, sources=registry({}))  # public repositories: no connectors
     commit = _git(root, "rev-parse", "HEAD")
     files = discover(root)
     real = [f for f in files if not f.alias_of and not f.generated_from]

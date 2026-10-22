@@ -165,6 +165,16 @@ def test_generated_agents_md_validates_as_okf_concept(make_bundle, capsys):
     assert (code, out) == (0, [])
 
 
+# The demo metric relies on a Jira epic and a Confluence page; without settings their status is unknown.
+DEMO_REMOTE = [
+    "[INFO] examples/demo/knowledge/ride_conversion_metric.md: sources: Source https://wheelo.atlassian.net/browse/WHL-42: "
+    "unknown, connector not configured: set OKF_JIRA_URL",
+    "[INFO] examples/demo/knowledge/ride_conversion_metric.md: sources: Source "
+    "https://wheelo.atlassian.net/wiki/spaces/WHL/pages/131073/Metriki+produkta: unknown, connector not configured: "
+    "set OKF_CONFLUENCE_URL",
+]
+
+
 def test_stale_with_changed_files(capsys, monkeypatch):
     monkeypatch.chdir(REPO_ROOT)
     code, out, err = run(
@@ -174,16 +184,17 @@ def test_stale_with_changed_files(capsys, monkeypatch):
     assert code == 0
     assert out == [
         "[WARNING] examples/demo/knowledge/auth_flow.md: sources: Source ../src/auth.py changed (examples/demo/src/auth.py); "
-        "document may be outdated, ask human:teamlead_ivan to review it"
+        "document may be outdated, ask human:teamlead_ivan to review it",
+        *DEMO_REMOTE,
     ]
-    assert "1 documents may be outdated" in err
+    assert "1 documents may be outdated, 0 updated alongside" in err
 
 
 def test_stale_reads_changed_files_from_stdin(capsys, monkeypatch):
     monkeypatch.chdir(REPO_ROOT)
     monkeypatch.setattr(sys, "stdin", io.StringIO("examples/demo/src/billing.py\n"))
     _, out, _ = run(capsys, "stale", "examples/demo/knowledge", "--changed", "-", "--repo-root", ".", "--now", "2026-10-22")
-    assert sorted(line.split(": ")[0] for line in out) == [
+    assert sorted(line.split(": ")[0] for line in out if line not in DEMO_REMOTE) == [
         "[WARNING] examples/demo/knowledge/billing_service.md",
         "[WARNING] examples/demo/knowledge/payment_failures_runbook.md",
     ]
@@ -194,7 +205,8 @@ def test_stale_marks_expired_documents(capsys, monkeypatch):
     _, out, _ = run(capsys, "stale", "examples/demo/knowledge", "--repo-root", ".", "--now", "2026-11-10T00:00:00Z")
     assert out == [
         "[WARNING] examples/demo/knowledge/api_start_ride.md: stale_after: 2026-11-10T00:00:00Z has passed "
-        "(now 2026-11-10T00:00:00Z); document is stale, ask human:maria_backend to review it"
+        "(now 2026-11-10T00:00:00Z); document is stale, ask human:maria_backend to review it",
+        *DEMO_REMOTE,
     ]
 
 
