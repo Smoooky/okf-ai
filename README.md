@@ -31,8 +31,9 @@ uvx --from git+https://github.com/Smoooky/okf-ai okf trust .
 Поставить насовсем — `pipx install git+https://github.com/Smoooky/okf-ai` (или `pip install git+https://…`);
 с черновиками от Claude — `pipx install "okf-ai[llm] @ git+https://github.com/Smoooky/okf-ai"`.
 Нужны Python 3.10+ и Git (проверено на 3.11 и 3.12). Ставится то, что лежит в ветке по умолчанию на GitHub;
-до слияния `feat/okf-cli` добавьте `@feat/okf-cli` к адресу. Проверено локально: `uvx` и `pip` из git-адреса
-репозитория, сборка `python -m build` и `twine check` проходят.
+до слияния `feat/okf-cli` добавьте `@feat/okf-cli` к адресу. Проверено локально, без GitHub: `pip install`
+из git-адреса локального клона (`git+file://…`), `uvx --from <папка клона> okf trust`, сборка `python -m build`
+и `twine check`; `uvx` с `git+https://github.com/…` заработает, когда ветка будет на GitHub.
 
 **PyPI.** Пакет готов к публикации под именем `okf-ai` (на 22.10.2026 имя свободно): `python -m build`,
 `twine upload dist/*` — нужен аккаунт PyPI и выбранная лицензия (её пока нет). После публикации —
