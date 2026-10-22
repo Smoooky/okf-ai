@@ -96,6 +96,26 @@ jobs:
           fi
           cat fix-summary.txt fix.diff
 
+      - name: okf shadow
+        env:  # control questions: only with $OKF_REPO/.okf/shadow.yml and an LLM key; in a PR, against the base
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OKF_LLM_API_KEY: ${{ secrets.OKF_LLM_API_KEY }}
+          OKF_LLM_BASE_URL: ${{ vars.OKF_LLM_BASE_URL }}
+          OKF_LLM_MODEL: ${{ vars.OKF_LLM_MODEL }}
+        run: |
+          touch shadow.txt shadow-summary.txt
+          if [ ! -f "$OKF_REPO/.okf/shadow.yml" ]; then
+            echo "No control questions in $OKF_REPO/.okf/shadow.yml." > shadow-summary.txt; exit 0
+          fi
+          key=""
+          if [ -n "$ANTHROPIC_API_KEY" ]; then key="yes"; fi
+          if [ -n "$OKF_LLM_API_KEY" ] && [ -n "$OKF_LLM_BASE_URL" ] && [ -n "$OKF_LLM_MODEL" ]; then key="yes"; fi
+          if [ -z "$key" ]; then echo "Shadow test skipped: no LLM key." > shadow-summary.txt; exit 0; fi
+          base=""
+          if [ -n "$BASE_REF" ]; then base="--base origin/$BASE_REF"; fi
+          okf shadow "$OKF_REPO" $base > shadow.txt 2> shadow-summary.txt || true
+          cat shadow-summary.txt shadow.txt
+
       - name: okf agents-check
         id: agents_check
         run: |
@@ -126,7 +146,7 @@ jobs:
           AGENTS_EXIT: ${{ steps.agents_check.outputs.exit }}
           VALIDATE_EXIT: ${{ steps.validate.outputs.exit }}
         run: |
-          for name in trust agents-check validate stale fix; do touch "$name.txt" "$name-summary.txt"; done
+          for name in trust agents-check validate stale fix shadow; do touch "$name.txt" "$name-summary.txt"; done
           touch fix.diff
           section() {  # title, output file, summary file
             echo "### $1"
@@ -155,6 +175,7 @@ jobs:
             section "$(title "okf agents-check: instructions for AI agents" "$AGENTS_EXIT" agents-check.txt)" agents-check.txt agents-check-summary.txt
             section "$(title "okf validate: OKF v0.2 knowledge" "$VALIDATE_EXIT" validate.txt)" validate.txt validate-summary.txt
             section "$(title "okf stale: documents that may be outdated" 0 stale.txt)" stale.txt stale-summary.txt
+            section "$(title "okf shadow: control questions" 0 shadow.txt)" shadow.txt shadow-summary.txt
           } > okf-report.md
           cat okf-report.md >> "$GITHUB_STEP_SUMMARY"
 

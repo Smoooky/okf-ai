@@ -289,7 +289,8 @@ def _replace_token(line: str, old: str, new: str) -> str | None:
 class Provider:
     actor = ""
 
-    def complete(self, system: str, prompt: str, unit: str) -> dict:
+    def complete(self, system: str, prompt: str, unit: str, schema: dict | None = None) -> dict:
+        """The model's JSON answer; `schema` (default: a section draft) shapes it where the API can."""
         raise NotImplementedError
 
 
@@ -300,7 +301,7 @@ class AnthropicProvider(Provider):
         self.api_key, self.model, self.max_tokens = api_key, model, max_tokens
         self.actor = _actor("anthropic", model)
 
-    def complete(self, system: str, prompt: str, unit: str) -> dict:
+    def complete(self, system: str, prompt: str, unit: str, schema: dict | None = None) -> dict:
         try:
             import anthropic
         except ImportError as exc:
@@ -315,7 +316,7 @@ class AnthropicProvider(Provider):
                 max_tokens=self.max_tokens,
                 system=system,
                 messages=[{"role": "user", "content": prompt}],
-                output_config={"effort": "medium", "format": {"type": "json_schema", "schema": DRAFT_SCHEMA}},
+                output_config={"effort": "medium", "format": {"type": "json_schema", "schema": schema or DRAFT_SCHEMA}},
                 **extra,
             )
         except anthropic.AuthenticationError as exc:
@@ -341,7 +342,7 @@ class OpenAICompatibleProvider(Provider):
         self.api_key, self.model, self.max_tokens = api_key, model, max_tokens
         self.actor = _actor("openai-compatible", model)
 
-    def complete(self, system: str, prompt: str, unit: str) -> dict:
+    def complete(self, system: str, prompt: str, unit: str, schema: dict | None = None) -> dict:
         body = json.dumps({
             "model": self.model, "temperature": 0, "max_tokens": self.max_tokens,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
@@ -372,7 +373,9 @@ class ReplayProvider(Provider):
         self.answers = data.get("units", {})
         self.actor = _actor(data.get("provider", "replay"), data.get("model", "saved-answer"))
 
-    def complete(self, system: str, prompt: str, unit: str) -> dict:
+    def complete(self, system: str, prompt: str, unit: str, schema: dict | None = None) -> dict:
+        if unit not in self.answers and unit.startswith("base:"):
+            unit = unit[len("base:"):]  # the same saved answer for the base branch, unless it has its own
         if unit not in self.answers:
             raise FixError(f"the saved answers have nothing for {unit}")
         return self.answers[unit]

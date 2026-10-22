@@ -17,6 +17,8 @@
   `okf import confluence` и `okf import notion` переносят страницы в git как документы OKF; свой коннектор — один файл;
 - `okf agents-check` и `okf stale` — страж в PR: битые пути и команды в инструкциях, документы, чей код поменялся;
 - `okf notify` — напоминание в Slack или Teams тем, кто подтверждал то, что теперь «перепроверить»;
+- `okf shadow` — контрольные вопросы к базе знаний: открывает ли агент нужное, не опирается ли на устаревшее,
+  и что стало хуже в PR;
 - `okf validate` — валидатор базы знаний [OKF v0.2](https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md)
   плюс строгий профиль okf-ai ([спека](etc/spec/cli-validator-v2.md)); `okf agents` — роутер `AGENTS.md` для бандла;
 - [GitHub Action](.github/workflows/okf.yml) — всё это на каждом pull request.
@@ -381,6 +383,35 @@ CONNECTORS: list[type[Source]] = [ConfluenceSource, JiraSource, MyWikiSource]
 если перепроверку должно просить другое событие (так сделан Jira: только закрытие). Реестр отдаёт ресурс первому
 коннектору, чей `matches` вернул `True`; git идёт последним и берёт все пути.
 
+## `okf shadow`: shadow-тестирование знаний
+
+Проверяет не тексты, а то, как ими пользуется агент. В `.okf/shadow.yml` — контрольные вопросы:
+
+```yaml
+questions:
+  - id: auth-lockout
+    question: После скольких неверных SMS-кодов блокируется номер и на сколько?
+    expect_documents: [auth_flow.md]          # пути от корня бандла
+    expect_facts: ["5 неверных", "15 минут"]  # должны быть в ответе (регистр не важен)
+```
+
+На каждый вопрос два вызова модели: сначала она видит только роутер `AGENTS.md` бандла и выбирает, какие файлы
+открыть (не больше пяти), потом получает их текст и отвечает. Три проверки: открыла ли нужные документы, не
+опирается ли на «перепроверить» или «сломано» (по карте доверия), есть ли в ответе ожидаемые факты.
+
+```text
+[WARNING] shadow: auth-lockout: relied on auth_flow.md (to recheck)
+[OK] shadow: gps-retention: opened data_retention_policy.md; all checks passed
+okf shadow: 3 questions, 2 passed (documents 3/3, trust 2/3, facts 3/3); answers by anthropic/claude-opus-5-5
+```
+
+- `--base origin/main` — те же вопросы на базовой ветке (во временном `git worktree`) и список вопросов, которые
+  стали хуже: какая проверка раньше проходила, а теперь нет. Так в PR видно, что правка кода сделала знания
+  ненадёжными для агента.
+- Модель та же, что у `okf fix --draft`: `ANTHROPIC_API_KEY` или `OKF_LLM_*`. Без ключа — сообщение, что задать,
+  и ничего не запускается (код `2`). `--replay FILE` — сохранённые ответы (демо, тесты); `--strict` — код `1`, если
+  вопрос не прошёл или стал хуже. Проверено только на мок-модели и сохранённых ответах.
+
 ## `okf agents-check [repo] [--strict] [--changed FILE...] [--base REF]`
 
 ```text
@@ -532,7 +563,9 @@ okf scan --score report/label.csv       # точность связей посл
 7. по желанию (`OKF_AUTO_PR=true`) — задание `auto-pr`: на push в `main` правки уходят PR `[OKF-Update]`
    (`okf fix --pr`), открытый такой PR обновляется, а не дублируется;
 8. по расписанию, если задан секрет `OKF_SLACK_WEBHOOK` или `OKF_TEAMS_WEBHOOK`, — `okf notify`: напоминания тем,
-   кто подтверждал разделы, которые теперь «перепроверить».
+   кто подтверждал разделы, которые теперь «перепроверить»;
+9. если в `$OKF_REPO/.okf/shadow.yml` есть контрольные вопросы и задан ключ LLM, — `okf shadow`, в PR со сравнением
+   с базовой веткой: какие вопросы стали хуже (раздел отчёта «okf shadow»).
 
 Коннекторы — по желанию: переменные `OKF_CONFLUENCE_URL`, `OKF_JIRA_URL`, `OKF_ATLASSIAN_EMAIL` и секреты
 `OKF_ATLASSIAN_TOKEN` или `OKF_ATLASSIAN_PAT`, `OKF_NOTION_TOKEN`, `OKF_SLACK_TOKEN`. Без них шаги работают как раньше
@@ -708,6 +741,27 @@ okf import: 2 pages from space WHL, 2 written to knowledge; they stay not verifi
 okf validate (okf): 14 files, 0 errors, 0 warnings
 ```
 
+**6. Shadow-тест: найдёт ли агент нужное и не опрётся ли на устаревшее.** Три контрольных вопроса лежат в
+`.okf/shadow.yml`; ответы модели на демо — **пример, написанный вручную** (`.okf/shadow_answers.example.json`),
+с ключом `okf shadow` спрашивает модель сам. В свежем репозитории (до шагов 3–4):
+
+```bash
+okf shadow --replay .okf/shadow_answers.example.json
+git switch pr/billing-tariff
+okf shadow --replay .okf/shadow_answers.example.json --base main
+```
+
+```text
+[WARNING] shadow: auth-lockout: relied on auth_flow.md (to recheck)
+[WARNING] shadow: minute-price: relied on billing_service.md (to recheck)
+[OK] shadow: gps-retention: opened data_retention_policy.md; all checks passed
+[WARNING] shadow: minute-price: worse than main: trust
+okf shadow: 3 questions, 1 passed (documents 3/3, trust 1/3, facts 3/3); answers by anthropic/claude-opus-5-5; 1 worse than main
+```
+
+На `main` вопрос про цену минуты проходит; в PR цена в коде меняется, документ о биллинге становится
+«перепроверить», и тот же ответ уже опирается на устаревшее — `okf shadow` отмечает вопрос как ставший хуже.
+
 ### Страж в PR: инструкции агентов (1 минута)
 
 В самом репозитории okf-ai, на `examples/demo`:
@@ -744,7 +798,7 @@ okf validate examples/demo/knowledge --strict && okf agents examples/demo/knowle
 ## Структура
 
 ```text
-src/okf/        trust.py (карта доверия, verify), fix.py (правки и черновики), pr.py (okf fix --pr), notify.py (okf notify), scan.py (проба), instructions.py (agents-check), schema.py (поля и правила OKF,
+src/okf/        trust.py (карта доверия, verify), fix.py (правки и черновики), pr.py (okf fix --pr), notify.py (okf notify), shadow.py (okf shadow), scan.py (проба), instructions.py (agents-check), schema.py (поля и правила OKF,
                 профили okf и strict), importer.py (okf import), view.py (report.html, okf view), scaffold.py (okf init), validate.py, stale.py,
                 agents.py, bundle.py, git.py, cli.py
 src/okf/sources/ коннекторы: base.py (интерфейс Source), git.py, confluence.py, jira.py, notion.py, slack.py, http.py (запросы, фикстуры)

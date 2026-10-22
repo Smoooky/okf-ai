@@ -51,6 +51,7 @@ def main(argv: list[str] | None = None) -> int:
     print("  okf fix --draft --only AGENTS.md#Auth --replay .okf/auth_draft.example.json   # a saved example answer")
     print("  OKF_SOURCES_FIXTURES=.okf/atlassian-fixtures OKF_CONFLUENCE_URL=https://wheelo.atlassian.net/wiki \\")
     print("    OKF_JIRA_URL=https://wheelo.atlassian.net okf trust   # Confluence and Jira from hand-written fixtures")
+    print("  okf shadow --replay .okf/shadow_answers.example.json   # control questions, saved example answers")
     return 0
 
 
@@ -102,6 +103,9 @@ def build(target: Path) -> None:
     shutil.copy(HERE / "demo-pr" / "auth_draft.example.json", target / ".okf" / "auth_draft.example.json")
     # Hand-written answers in the shape of Confluence and Jira REST, for OKF_SOURCES_FIXTURES (not committed).
     shutil.copytree(HERE / "atlassian-fixtures", target / ".okf" / "atlassian-fixtures")
+    # Control questions for okf shadow and a hand-written example of the model's answers (not committed).
+    shutil.copy(HERE / "demo-pr" / "shadow.yml", target / ".okf" / "shadow.yml")
+    shutil.copy(HERE / "demo-pr" / "shadow_answers.example.json", target / ".okf" / "shadow_answers.example.json")
 
 
 class _Git:

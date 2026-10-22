@@ -1,0 +1,15 @@
+# Control questions for `okf shadow` on the Wheelo demo: what an agent should be able to answer
+# from the knowledge base, which documents it should open, and which facts the answer must have.
+questions:
+  - id: auth-lockout
+    question: После скольких неверных SMS-кодов блокируется номер и на сколько?
+    expect_documents: [auth_flow.md]
+    expect_facts: ["5 неверных", "15 минут"]
+  - id: minute-price
+    question: Сколько стоит минута поездки?
+    expect_documents: [billing_service.md]
+    expect_facts: ["8 ₽"]
+  - id: gps-retention
+    question: Сколько дней мы храним GPS-точки поездок?
+    expect_documents: [data_retention_policy.md]
+    expect_facts: ["180 дней"]

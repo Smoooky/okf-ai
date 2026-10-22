@@ -1,4 +1,4 @@
-"""Command line: okf init | trust | fix | verify | view | notify | import | sources | agents-check | stale | validate | agents | scan."""
+"""Command line: okf init | trust | fix | verify | view | notify | shadow | import | sources | agents-check | stale | validate | agents | scan."""
 
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ from okf.instructions import check_repository
 from okf.scan import ScanError, find_repos, parse_repos, scan, score
 from okf.scaffold import init as init_scaffold
 from okf.schema import get_profile
+from okf.shadow import ShadowError, at_ref, drop_worktree, load_questions, run as run_shadow, worse
 from okf.sources import Unavailable, registry
 from okf.sources.base import day
 from okf.sources.confluence import ConfluenceSource
@@ -59,6 +60,8 @@ def main(argv: list[str] | None = None) -> int:
         return _init(args)
     if args.command == "notify":
         return _notify(args)
+    if args.command == "shadow":
+        return _shadow(args)
     if args.command in ("agents-check", "trust", "sources"):
         if not Path(args.repo).is_dir():
             print(f"okf: error: directory not found: {args.repo}", file=sys.stderr)
@@ -139,6 +142,17 @@ def _parser() -> argparse.ArgumentParser:
                         help="human:<id> -> {slack: <member id>} to mention people (default: .okf/people.yml)")
     notify.add_argument("--dry-run", action="store_true", help="print the messages, send nothing")
     _add_now(notify)
+
+    shadow = commands.add_parser("shadow", help="shadow-test the knowledge: does an agent open the right documents, "
+                                 "avoid outdated ones and answer the control questions")
+    shadow.add_argument("repo", nargs="?", default=".", help="repository (default: .)")
+    shadow.add_argument("--questions", default=".okf/shadow.yml", metavar="FILE",
+                        help="control questions (default: .okf/shadow.yml)")
+    shadow.add_argument("--bundle", metavar="DIR", help="the OKF bundle (default: the only one in the repository)")
+    shadow.add_argument("--base", metavar="REF", help="also run on REF (e.g. origin/main) and list what got worse")
+    shadow.add_argument("--replay", metavar="FILE", help="saved model answers instead of model calls")
+    shadow.add_argument("--strict", action="store_true", help="exit 1 if a question fails or got worse")
+    _add_now(shadow)
 
     importer = commands.add_parser("import", help="bring knowledge from Confluence or Notion into git as OKF documents")
     importer.add_argument("system", choices=["confluence", "notion"], help="where from")
@@ -489,6 +503,65 @@ def _notify(args: argparse.Namespace) -> int:
     print(f"okf notify: {units} units to recheck, {len(found)} people or groups; {verb} "
           f"{len(found) * max(len(targets), 1) - failed} messages", file=sys.stderr)
     return 1 if failed else 0
+
+
+def _shadow(args: argparse.Namespace) -> int:
+    root = Path(args.repo).resolve()
+    try:
+        questions = load_questions(root / args.questions if not Path(args.questions).is_absolute() else
+                                   Path(args.questions))
+        provider = ReplayProvider(Path(args.replay)) if args.replay else provider_from_env()
+    except (ShadowError, OSError, ValueError) as exc:
+        print(f"okf: error: {exc}", file=sys.stderr)
+        return 2
+    if provider is None:
+        print(f"okf shadow: no LLM key, nothing was run: {KEY_HELP} (or --replay FILE with saved answers)",
+              file=sys.stderr)
+        return 2
+    bundles = [Path(args.bundle).resolve()] if args.bundle else find_bundles(root)
+    if len(bundles) != 1:
+        print(f"okf: error: {'no OKF bundle' if not bundles else 'several bundles'} in {args.repo}; "
+              "name one with --bundle DIR", file=sys.stderr)
+        return 2
+    now, git_root = _now(args), toplevel(root)
+    head = run_shadow(bundles[0], questions, provider, _levels(git_root or root, bundles[0], now), now)
+    lost = []
+    if args.base:
+        if git_root is None:
+            print("okf: error: --base needs a git repository", file=sys.stderr)
+            return 2
+        try:
+            target, temp = at_ref(git_root, args.base)
+        except ShadowError as exc:
+            print(f"okf: error: {exc}", file=sys.stderr)
+            return 2
+        try:
+            base_bundle = target / bundles[0].relative_to(git_root)
+            base = run_shadow(base_bundle, questions, provider, _levels(target, base_bundle, now), now, "base:")
+        finally:
+            drop_worktree(git_root, target, temp)
+        lost = worse(base, head)
+    for result in head:
+        q = result.question
+        if result.passed:
+            print(f"[OK] shadow: {q.id}: opened {', '.join(result.opened)}; all checks passed")
+        else:
+            print(f"[WARNING] shadow: {q.id}: {'; '.join(result.problems())}")
+    for result, checks in lost:
+        print(f"[WARNING] shadow: {result.question.id}: worse than {args.base}: {', '.join(checks)}")
+    sys.stdout.flush()
+    counts = ", ".join(f"{name} {sum(r.checks[name] for r in head)}/{len(head)}" for name in ("documents", "trust",
+                                                                                            "facts"))
+    tail = f"; {len(lost)} worse than {args.base}" if args.base else ""
+    print(f"okf shadow: {len(head)} questions, {sum(r.passed for r in head)} passed ({counts}); "
+          f"answers by {provider.actor}{tail}", file=sys.stderr)
+    return 1 if args.strict and (lost or not all(r.passed for r in head)) else 0
+
+
+def _levels(repo: Path, bundle: Path, now: datetime) -> dict[str, str]:
+    bundle = bundle.resolve()
+    trust_map = build_map(repo, History(toplevel(repo), now), None, [bundle], now)
+    return {Path(os.path.relpath(u.path, bundle)).as_posix(): u.level for u in trust_map.units if u.kind == "knowledge"}
 
 
 def _init(args: argparse.Namespace) -> int:
