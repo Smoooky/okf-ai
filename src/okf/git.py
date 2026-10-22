@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fnmatch
 import os
 import re
 import subprocess
@@ -12,6 +13,19 @@ from pathlib import Path
 
 class GitError(RuntimeError):
     pass
+
+
+def is_glob(path: str) -> bool:
+    return any(ch in path for ch in "*?[")
+
+
+def source_matches(pattern: str, changed_path: str) -> bool:
+    """Does a source (a file, a directory: everything under it, or a glob) cover a changed path?
+    Both are relative to the same root, with forward slashes. The one rule every command uses."""
+    if is_glob(pattern):
+        return fnmatch.fnmatchcase(changed_path, pattern)
+    pattern = pattern.rstrip("/")
+    return changed_path == pattern or changed_path.startswith(pattern + "/")
 
 
 @dataclass(frozen=True)
@@ -150,11 +164,11 @@ class History:
         if relative is None:
             return None
         if relative not in self._last:
-            dirty = [d for d in self.dirty() if d == relative or d.startswith(relative.rstrip("/") + "/")]
+            dirty = [d for d in self.dirty() if source_matches(relative, d)]
             if dirty:
                 self._last[relative] = max(self._modified(self.root / d) for d in dirty)
             else:
-                spec = f":(glob){relative}" if any(ch in relative for ch in "*?[") else relative
+                spec = f":(glob){relative}" if is_glob(relative) else relative
                 follow = ["--follow"] if (self.root / relative).is_file() else []
                 try:
                     output = _git(["log", "-1", *follow, "--format=%cI", "--", spec], cwd=self.root).strip()

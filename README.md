@@ -296,7 +296,8 @@ After reading, confirm in one command: `okf verify "AGENTS.md#Auth" "knowledge/a
 
 У Jira `fields.updated` двигает каждый комментарий, поэтому перепроверку просит только закрытие; открытая задача
 документ не трогает. Страница, изменённая после подтверждения, — `Confluence page "…" (v14) changed <дата>`.
-`okf stale` сравнивает с `verified` или, если подтверждений нет, с записанным `sources[].last_modified`.
+`okf stale` сравнивает с тем же моментом, что и карта доверия: последним `verified`, или переписыванием
+инструментом после него, или, если подтверждений нет, последней правкой файла.
 
 **Настройки — только переменные окружения:**
 - `OKF_CONFLUENCE_URL` (`https://<site>.atlassian.net/wiki` или адрес Server/DC), `OKF_JIRA_URL`;

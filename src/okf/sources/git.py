@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import fnmatch
 import os
 import re
 from datetime import datetime
@@ -10,8 +9,11 @@ from pathlib import Path
 from urllib.parse import unquote
 
 from okf.bundle import SCHEME_RE, Document
-from okf.git import History, commit_at, diff_since
+from okf.git import History, commit_at, diff_since, is_glob, source_matches
 from okf.sources.base import Source
+
+__all__ = ["GITHUB_FILE_RE", "GitSource", "is_glob", "normalize_repo_path", "relative_path", "resource_paths",
+           "source_matches"]
 
 # https://github.com/<owner>/<repo>/blob/<ref>/<path>: the file is <path> in this repository.
 GITHUB_FILE_RE = re.compile(r"^https?://github\.com/[^/]+/[^/]+/(?:blob|tree)/[^/]+/(?P<path>[^?#]+)")
@@ -82,14 +84,6 @@ def resource_paths(resource: str, doc: Document, bundle_root: Path, repo_root: P
         if relative and not relative.startswith("..") and relative not in result:
             result.append(relative)
     return result
-
-
-def source_matches(pattern: str, changed_path: str) -> bool:
-    """A source is a file, a directory (matches everything under it) or a glob."""
-    if any(ch in pattern for ch in "*?["):
-        return fnmatch.fnmatchcase(changed_path, pattern)
-    pattern = pattern.rstrip("/")
-    return changed_path == pattern or changed_path.startswith(pattern + "/")
 
 
 def normalize_repo_path(path: str) -> str:

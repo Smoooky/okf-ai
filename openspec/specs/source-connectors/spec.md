@@ -436,7 +436,7 @@
 - THEN статус `unknown`, причина содержит `no fixture for GET /wiki/api/v2/pages/2`
 
 ### Requirement: Удалённые источники в okf stale
-Команда `okf stale` SHALL выводить `[WARNING] <file>: sources: Source <resource>: <что> <глагол> <дата>, after it was last verified|after its recorded last_modified; document may be outdated[, ask <reviewer> to review it]`, если сигнал удалённого источника новее последнего `verified` или записанного `sources[].last_modified`, и `[INFO] … Source <resource>: unknown, <причина>` для источника, который нельзя прочитать.
+Команда `okf stale` SHALL выводить `[WARNING] <file>: sources: Source <resource>: <что> <глагол> <дата>, after it was last verified|after it was last written|after it was last edited; document may be outdated[, ask <reviewer> to review it]`, если сигнал удалённого источника новее того же момента, с которым сравнивает карта доверия: последнего подтверждения, или переписывания инструментом или моделью после него (`written`), или, если подтверждений нет, последней правки файла в git (`edited`); и `[INFO] … Source <resource>: unknown, <причина>` для источника, который нельзя прочитать. Записанный `sources[].last_modified` для сравнения не используется.
 
 #### Scenario: Эпик закрыт после подтверждения
 - GIVEN документ подтверждён `human:pm_anna`, эпик `WHL-42` закрыт 2026-10-14 после этого

@@ -4,9 +4,10 @@ from datetime import datetime, timezone
 
 import pytest
 
-from conftest import OFFICIAL_BUNDLE, doc, meta
+from conftest import DELETE, OFFICIAL_BUNDLE, doc, meta
 from okf.bundle import Bundle
 from okf.git import changed_paths, changes_since
+from okf.report import WARNING
 from okf.stale import find_stale, resource_paths, source_matches
 
 NOW = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
@@ -199,3 +200,69 @@ def test_git_changed_files_against_base(tmp_path):
     (repo / "src/billing.py").write_text("FEE = 60\n")  # uncommitted change counts too
 
     assert sorted(changed_paths(changes_since(repo, "main"))) == ["src/auth.py", "src/billing.py"]
+
+
+# --- okf stale and okf trust decide together (one map, one path rule) ---
+
+
+def glob_repo(tmp_path):
+    from test_trust import Repo
+
+    repo = Repo(tmp_path / "repo")
+    repo.write({"src/schema.sql": "create table rides();\n", "src/auth.py": "x = 1\n",
+                "kb/index.md": '---\nokf_version: "0.2"\n---\n# KB\n[t](tables.md)\n',
+                "kb/tables.md": doc(meta(sources=[{"resource": "../src/*.sql"}],
+                                         verified=[{"by": "human:ivan", "at": "2026-09-01T00:00:00Z"}],
+                                         generated={"by": "human:ivan", "at": "2026-09-01T00:00:00Z"}))})
+    return repo.commit("2026-06-01T10:00:00Z")
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
+def test_a_glob_source_is_a_source_in_trust_too(tmp_path):
+    from okf.git import Change, History
+    from okf.trust import build_map
+
+    repo = glob_repo(tmp_path)
+    [unit] = [u for u in build_map(repo.root, History(repo.root, NOW), now=NOW).units if u.kind == "knowledge"]
+    assert unit.level == "human-verified"  # was "broken": trust checked a glob with Path.exists()
+    stale_issues = find_stale(Bundle.load(repo.root / "kb"), ["src/schema.sql"], repo.root, NOW)
+    assert [(i.level, i.message) for i in stale_issues] == [
+        (WARNING, "Source ../src/*.sql changed (src/schema.sql); document may be outdated, ask human:ivan to review it")]
+    since = build_map(repo.root, History(repo.root, NOW), [Change("M", "src/schema.sql")], now=NOW)
+    [unit] = [u for u in since.units if u.kind == "knowledge"]
+    assert (unit.level, unit.in_change) == ("recheck", ["src/schema.sql"])  # was not matched: prefix compare
+    assert find_stale(Bundle.load(repo.root / "kb"), ["src/auth.py"], repo.root, NOW) == []
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
+def test_an_uncommitted_change_under_a_glob_counts(tmp_path):
+    from okf.git import History
+    from okf.trust import build_map
+
+    repo = glob_repo(tmp_path)
+    (repo.root / "src" / "schema.sql").write_text("create table rides(id int);\n", encoding="utf-8")
+    [unit] = [u for u in build_map(repo.root, History(repo.root, NOW), now=NOW).units if u.kind == "knowledge"]
+    assert unit.level == "recheck"  # the working copy is newer than the check (was: the glob missed dirty files)
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
+def test_remote_sources_are_compared_with_the_same_moment(tmp_path):
+    from conftest import REPO_ROOT
+    from okf.git import History
+    from okf.sources import registry
+    from okf.trust import build_map
+    from test_trust import Repo
+
+    env = {"OKF_SOURCES_FIXTURES": str(REPO_ROOT / "examples" / "atlassian-fixtures"),
+           "OKF_CONFLUENCE_URL": "https://wheelo.atlassian.net/wiki"}
+    repo = Repo(tmp_path / "repo")
+    repo.write({"kb/index.md": '---\nokf_version: "0.2"\n---\n# KB\n[p](prices.md)\n',
+                "kb/prices.md": doc(meta(**{"sources": [{"resource": "confluence://131074",
+                                                         "last_modified": "2026-08-20T10:00:00Z"}],
+                                            "verified": DELETE, "generated": DELETE}))})
+    repo.commit("2026-10-10T10:00:00Z")  # written after the page changed (2026-10-03)
+    [unit] = [u for u in build_map(repo.root, History(repo.root, NOW), now=NOW, sources=registry(env)).units
+              if u.kind == "knowledge"]
+    assert unit.level == "unverified"
+    # was a warning: okf stale compared the page with the recorded last_modified, okf trust with the last edit
+    assert find_stale(Bundle.load(repo.root / "kb"), [], repo.root, NOW, registry(env)) == []

@@ -32,6 +32,7 @@ from okf.instructions import (
     instruction_scope, references,
 )
 from okf.sources import Check, Registry, registry
+from okf.sources.git import is_glob, source_matches
 from okf.values import parse_instant
 
 LEVELS = ("broken", "recheck", "human-verified", "process-verified", "unverified")
@@ -73,6 +74,8 @@ class Unit:
     broken_types: list[str] = field(default_factory=list)
     links: list[dict] = field(default_factory=list)  # every reference, for okf scan and --json
     remote: list[Check] = field(default_factory=list)  # Confluence pages, Jira issues, other URLs in `sources`
+    refs: list[tuple[str, list[Path]]] = field(default_factory=list)  # OKF `sources` as written -> paths or globs
+    in_change_refs: list[tuple[str, list[str]]] = field(default_factory=list)  # (resource, changed paths it matched)
     end: int = 0
     reason: str = ""  # a short code for statistics, e.g. "broken:npm-script", "recheck:moved"
 
@@ -120,31 +123,36 @@ class TrustMap:
 
 def build_map(root: Path, history: History, changes: list[Change] | None = None,
               bundles: list[Path] | None = None, now: datetime | None = None,
-              base_commit: str | None = None, sources: Registry | None = None) -> TrustMap:
+              base_commit: str | None = None, sources: Registry | None = None,
+              changes_root: Path | None = None, instructions: bool = True) -> TrustMap:
     """The trust map of `root`. With `changes` (and the `base_commit` they start from), also what a
     pull request changed; a section or document the same change edited is not asked to be rechecked.
-    `sources`: connectors for remote resources, configured from the environment by default."""
+    `sources`: connectors for remote resources, configured from the environment by default.
+    `changes` are paths relative to the git root, or to `changes_root` outside git (okf stale --changed).
+    `instructions=False` maps only the knowledge (what okf stale reports on)."""
     root = Path(root).resolve()
     now = now or datetime.now(timezone.utc)
-    instructions, notes = instruction_units(root, history)
-    units = instructions + knowledge_units(root, history, bundles, sources)
+    found, notes = instruction_units(root, history) if instructions else ([], [])
+    units = found + knowledge_units(root, history, bundles, sources)
     changed = None if changes is None else set(changed_paths(changes))
+    base = history.root or (Path(changes_root).resolve() if changes_root else root)
     if changed is not None:
-        _mark_updated(units, history, changed, base_commit)
+        _mark_updated(units, history, changed, base_commit, base)
     for unit in units:
-        _evaluate(unit, root, history, changed, now)
+        _evaluate(unit, root, history, changed, now, base)
     order = {level: i for i, level in enumerate(LEVELS)}
     units.sort(key=lambda u: order[u.level])  # stable: file order within a level
     return TrustMap(units, root, since=changes is not None, notes=notes, shallow=history.shallow)
 
 
-def _mark_updated(units: list[Unit], history: History, changed: set[str], base_commit: str | None) -> None:
+def _mark_updated(units: list[Unit], history: History, changed: set[str], base_commit: str | None,
+                  base: Path) -> None:
     lines_by_file: dict[Path, set[int]] = {}
     for unit in units:
-        relative = history.relative(unit.path) if history.root else None
+        relative = _changed_path(unit.path, base)
         if relative is None or relative not in changed:
             continue
-        if unit.kind == "knowledge" or base_commit is None:
+        if unit.kind == "knowledge" or base_commit is None or history.root is None:
             unit.updated_in_change = True
             continue
         if unit.path not in lines_by_file:
@@ -243,8 +251,9 @@ def knowledge_units(root: Path, history: History, bundles: list[Path] | None = N
             candidates = [root / p for p in sources.git.paths(resource, doc, bundle_root, root)]
             if not candidates:
                 continue
+            unit.refs.append((resource, candidates))
             unit.touched.extend(candidates)
-            existing = [c for c in candidates if c.exists()]
+            existing = [c for c in candidates if _exists(c)]  # a glob exists if it matches a file
             moved = None if existing else next(filter(None, (history.moved(c) for c in candidates)), None)
             if existing:
                 unit.sources.append(existing[0])
@@ -321,7 +330,8 @@ class _Dated:
         return f"{self.label} {self.verb} {_day(self.at)}"
 
 
-def _evaluate(unit: Unit, root: Path, history: History, changed: set[str] | None, now: datetime) -> None:
+def _evaluate(unit: Unit, root: Path, history: History, changed: set[str] | None, now: datetime,
+              base: Path | None = None) -> None:
     dated = [_Dated(_show(s, root), d, path=s) for s in unit.sources if (d := history.last_change(s)) is not None]
     dated += [_Dated(r.signal.subject, r.signal.at, r.signal.verb, r.signal.reason) for r in unit.remote if r.signal]
     newest = max(dated, key=lambda item: item.at) if dated else None
@@ -329,11 +339,7 @@ def _evaluate(unit: Unit, root: Path, history: History, changed: set[str] | None
     last = f"last verified {_day(latest[0])} by {latest[1]}" if latest else "never verified"
 
     if changed is not None:
-        for path in unit.touched:
-            relative = history.relative(path) if history.root else None
-            if relative and any(c == relative or c.startswith(relative.rstrip("/") + "/") for c in changed):
-                unit.in_change.append(_show(path, root))
-        unit.in_change = sorted(set(unit.in_change))
+        _mark_in_change(unit, root, changed, base or history.root or root)
 
     def result(level: str, message: str, reason: str) -> None:
         unit.level, unit.message, unit.reason = level, message, reason
@@ -389,6 +395,56 @@ def _evaluate(unit: Unit, root: Path, history: History, changed: set[str] | None
     edited = f"; last edited {_day(unit.last_edited)}" if unit.last_edited else ""
     reason = "unverified" if unit.sources or _readable(unit) else "unverified:no-sources"
     return result("unverified", f"not verified{edited}" + _sources_note(unit), reason)
+
+
+def _mark_in_change(unit: Unit, root: Path, changed: set[str], base: Path) -> None:
+    """The paths a change touched that the unit relies on: files, directories (anything under them)
+    and globs, matched the same way for every command (source_matches)."""
+    found = []
+    for path in unit.touched:
+        pattern = _changed_path(path, base)
+        if pattern is None:
+            continue
+        matched = sorted(c for c in changed if source_matches(pattern, c))
+        if matched:
+            found += [_show(base / m, root) for m in matched] if is_glob(pattern) else [_show(path, root)]
+    unit.in_change = sorted(set(found))
+    for resource, candidates in unit.refs:
+        patterns = [p for p in (_changed_path(c, base) for c in candidates) if p]
+        matched = sorted(c for c in changed if any(source_matches(p, c) for p in patterns))
+        if matched:
+            unit.in_change_refs.append((resource, matched))
+
+
+def reference_moment(unit: Unit) -> tuple[datetime | None, str]:
+    """What a source change is compared with: the last confirmation, or the last time a tool or a
+    model rewrote the unit after it, or (never confirmed) its last edit. okf trust and okf stale
+    both use it. The second value says which: "verified", "written" or "edited"."""
+    latest = max(unit.verifications, default=None)
+    machine = unit.generated_by and not schema.is_human(unit.generated_by)
+    if machine and unit.generated_at and (latest is None or unit.generated_at > latest[0]):
+        return unit.generated_at, "written"
+    if latest is not None:
+        return latest[0], "verified"
+    return unit.last_edited, "edited"
+
+
+def _changed_path(path: Path, base: Path) -> str | None:
+    """A path (or glob) relative to where changed paths are counted from, with forward slashes."""
+    try:
+        relative = os.path.relpath(path if is_glob(str(path)) else Path(path).resolve(), base)
+    except ValueError:  # another drive on Windows
+        return None
+    relative = Path(relative).as_posix()
+    return None if relative.startswith("../") else relative
+
+
+def _exists(path: Path) -> bool:
+    if not is_glob(str(path)):
+        return path.exists()
+    parts = Path(path).parts
+    first = next(i for i, part in enumerate(parts) if is_glob(part))
+    return next(Path(*parts[:first]).glob(Path(*parts[first:]).as_posix()), None) is not None
 
 
 def machine_edited(unit: Unit) -> bool:
