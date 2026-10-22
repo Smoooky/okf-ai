@@ -70,17 +70,17 @@
 - THEN раздел не становится «перепроверить» из-за этого
 
 ### Requirement: Источники единицы знаний OKF
-Источниками файла знаний SHALL быть значения `sources[].resource`, разрешённые как в `okf stale` (пути от файла и от корня бандла, ссылки GitHub на файлы этого репозитория), а описания области с пробелами и другие URL не считаются источниками и не влияют на уровень; несуществующий источник делает документ «сломано» с сообщением `source "<resource>" does not exist`, а переехавший по истории git — «перепроверить».
+Источниками файла знаний SHALL быть значения `sources[].resource`, которые распознаёт зарегистрированный коннектор: коннектор git (пути от файла и от корня бандла, ссылки GitHub на файлы этого репозитория), Confluence (страницы), Jira (задачи и эпики), Notion (страницы) и Slack (закреплённые сообщения); описания области с пробелами и URL, которые не распознал ни один коннектор, не считаются источниками и не влияют на уровень; несуществующий файл-источник делает документ «сломано» с сообщением `source "<resource>" does not exist`, переехавший по истории git — «перепроверить», сигнал удалённого источника после последнего подтверждения (страница Confluence или Notion изменена, задача Jira перешла в Done, сообщение Slack отредактировано, откреплено или удалено) — «перепроверить» с сообщением `<что> <глагол> <дата>, <последнее подтверждение>`, а источник со статусом «неизвестно» не делает документ ни «сломано», ни «перепроверить», и его причина `<resource>: unknown, <причина>` дописывается к сообщению «подтверждено» или «не подтверждено».
 
 #### Scenario: Источник-путь
 - GIVEN `knowledge/auth_flow.md` с `resource: ../src/auth.py`, файл существует
 - WHEN строится карта
 - THEN источник документа — `src/auth.py`
 
-#### Scenario: Внешний URL не источник
+#### Scenario: Нераспознанный URL не источник
 - GIVEN `resource: https://wiki.example.com/auth`
 - WHEN строится карта
-- THEN этот источник не влияет на уровень документа
+- THEN этот источник не влияет на уровень и сообщение документа
 
 #### Scenario: Источника нет
 - GIVEN `resource: /src/gone.py`, файла нет и он не переименовывался
@@ -91,6 +91,32 @@
 - GIVEN `resource: ../src/config.py`, файл переименован в `src/settings.py` 2026-09-20
 - WHEN строится карта
 - THEN документ «перепроверить» с сообщением `../src/config.py moved to src/settings.py on 2026-09-20; …`
+
+#### Scenario: Страница Confluence изменена после подтверждения
+- GIVEN документ подтверждён 2026-09-01, `resource` — страница Confluence «Тарифы и биллинг», версия 3 которой создана 2026-10-03, коннектор настроен
+- WHEN запускается `okf trust`
+- THEN документ «перепроверить» с причиной `recheck:source-changed` и сообщением, начинающимся с `Confluence page "Тарифы и биллинг" (v3) changed 2026-10-03, last verified`
+
+#### Scenario: Эпик Jira закрыт после подтверждения
+- GIVEN `knowledge/ride_conversion_metric.md` подтверждён `human:pm_anna` 2026-09-01, `resource` — эпик `WHL-42`, перешедший в Done 2026-10-14
+- WHEN запускается `okf trust`
+- THEN выводится `[WARNING] knowledge/ride_conversion_metric.md: trust: epic WHL-42 closed 2026-10-14, last verified 2026-09-01 by human:pm_anna`, причина `recheck:closed`
+
+#### Scenario: Подтверждено после закрытия эпика
+- GIVEN эпик закрыт до последнего подтверждения документа, файлы-источники не менялись
+- WHEN запускается `okf trust`
+- THEN документ «подтверждено», сообщение заканчивается на `sources unchanged since`
+
+#### Scenario: Коннектор не настроен
+- GIVEN документ подтверждён человеком, ссылается на страницу Confluence и задачу Jira, `OKF_CONFLUENCE_URL` и `OKF_JIRA_URL` не заданы
+- WHEN запускается `okf trust`
+- THEN документ «подтверждено», а сообщение заканчивается на `; <ссылка на страницу>: unknown, connector not configured: set OKF_CONFLUENCE_URL (and 1 more)`
+- AND в `--json` у единицы в `remote` эти источники со `status` `unknown`
+
+#### Scenario: Источник недоступен
+- GIVEN Confluence отвечает 404 на страницу из `resource`
+- WHEN запускается `okf trust`
+- THEN документ не «сломано» и не «перепроверить» из-за этой страницы, источник показан как `unknown` с причиной `not found or no access (HTTP 404)`, код выхода не меняется
 
 ### Requirement: Даты подтверждения, правки и кода
 Карта SHALL брать последнее подтверждение раздела инструкций из `.okf/trust.yml`, а файла OKF — из `verified` в шапке; дату правки раздела — по последнему изменению его строк в истории git, а файла OKF — по последнему коммиту файла; дату кода — по последнему коммиту источника с учётом переименований, а для незакоммиченных правок — по времени изменения файла.
@@ -272,7 +298,7 @@
 - THEN код выхода 0
 
 ### Requirement: Вывод для машин
-С `--json` команда SHALL печатать в stdout JSON с полями `summary` (`units`, `verified`, `recheck`, `broken`, `unverified`, `in_change`, `history`: `full` или `shallow`), `units` (для каждой показанной единицы: `unit`, `file`, `section`, `line`, `kind`, `level`, `reason`, `message`, `sources`, `changed`, `in_change`, `updated_in_change`, `broken`, `moved`, `verified`, `last_edited`, `links`) и `notes`.
+С `--json` команда SHALL печатать в stdout JSON с полями `summary` (`units`, `verified`, `recheck`, `broken`, `unverified`, `in_change`, `history`: `full` или `shallow`), `units` (для каждой показанной единицы: `unit`, `file`, `section`, `line`, `kind`, `level`, `reason`, `message`, `sources`, `changed`, `in_change`, `updated_in_change`, `broken`, `moved`, `verified`, `last_edited`, `links`, `remote` — удалённые источники с `resource`, `connector`, `status`, `message`, `last_modified` и `signal`), `warnings` и `notes`.
 
 #### Scenario: JSON-сводка
 - GIVEN 4 единицы, одна «сломано», три «не подтверждено», полная история

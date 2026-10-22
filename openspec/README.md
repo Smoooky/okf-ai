@@ -13,15 +13,22 @@ openspec/
     agent-instructions-check/ okf agents-check
     stale-docs/               okf stale
     trust-map/                okf trust и okf verify
-    doc-fixes/                okf fix и --draft
+    source-connectors/        коннекторы git, Confluence, Jira, Notion, Slack; okf import, okf sources
+    knowledge-viewer/         okf trust --html и okf view
+    doc-fixes/                okf fix, --draft и --pr
+    reviewer-notify/          okf notify
+    shadow-testing/           okf shadow
+    project-init/             okf init
     scan-probe/               okf scan
     ci-action/                GitHub Action .github/workflows/okf.yml
-  changes/                    предложенные изменения, которые ещё не вошли в specs/
-    add-confluence-jira-connectors/
+  changes/                    предложенные изменения, которые ещё не вошли в specs/ (сейчас открытых нет)
+    <id>/
       .openspec.yaml          схема и дата создания
       proposal.md             зачем и что меняется
       tasks.md                чек-лист работ
       specs/<capability>/spec.md  дельта-спеки: ADDED / MODIFIED / REMOVED Requirements
+    archive/                  принятые изменения: их дельты уже перенесены в specs/
+      2026-10-23-add-confluence-jira-connectors/  коннекторы Confluence и Jira (→ source-connectors, trust-map)
 ```
 
 ## Как предложить изменение

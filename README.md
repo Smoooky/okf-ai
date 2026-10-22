@@ -30,15 +30,14 @@
 Одна команда, без установки и без PyPI — карта доверия текущего репозитория:
 
 ```bash
-uvx --from git+https://github.com/Smoooky/okf-ai okf trust .
+uvx --from git+https://github.com/Smoooky/okf-ai@okf-ai-mvp okf trust .
 ```
 
-Поставить насовсем — `pipx install git+https://github.com/Smoooky/okf-ai` (или `pip install git+https://…`);
-с черновиками от Claude — `pipx install "okf-ai[llm] @ git+https://github.com/Smoooky/okf-ai"`.
-Нужны Python 3.10+ и Git (проверено на 3.11 и 3.12). Ставится то, что лежит в ветке по умолчанию на GitHub;
-до слияния `feat/okf-cli` добавьте `@feat/okf-cli` к адресу. Проверено локально, без GitHub: `pip install`
-из git-адреса локального клона (`git+file://…`), `uvx --from <папка клона> okf trust`, сборка `python -m build`
-и `twine check`; `uvx` с `git+https://github.com/…` заработает, когда ветка будет на GitHub.
+Поставить насовсем — `pipx install git+https://github.com/Smoooky/okf-ai@okf-ai-mvp` (или `pip install git+https://…`);
+с черновиками от Claude — `pipx install "okf-ai[llm] @ git+https://github.com/Smoooky/okf-ai@okf-ai-mvp"`.
+Нужны Python 3.10+ и Git (проверено на 3.11 и 3.12). Пока код живёт в ветке `okf-ai-mvp`, адрес указывает на неё;
+после слияния в `main` суффикс `@okf-ai-mvp` можно убрать. Проверено: `pip install` из локального клона,
+сборка `python -m build` и `twine check`.
 
 **PyPI.** Пакет готов к публикации под именем `okf-ai` (на 22.10.2026 имя свободно): `python -m build`,
 `twine upload dist/*` — нужен аккаунт PyPI и выбранная лицензия (её пока нет). После публикации —
@@ -272,7 +271,7 @@ After reading, confirm in one command: `okf verify "AGENTS.md#Auth" "knowledge/a
 
 - Slack — incoming webhook (`{"text": …}`), Teams — webhook Workflows (Adaptive Card). Чтобы Slack упоминал
   человека, в `.okf/people.yml` — `human:teamlead_ivan: {slack: U0123ABC}`.
-- `--dry-run` печатает сообщения и ничего не шлёт. На 429/5xx — повторы с паузой; адрес вебхука — секрет и не
+- `--dry-run` печатает сообщения и ничего не шлёт. На 429, 502, 503 и 504 — повторы с паузой (на 500 — сразу ошибка); адрес вебхука — секрет и не
   печатается, ошибка называет только HTTP-статус; код выхода `1`, если что-то не ушло.
 - В Action — задание `notify` по расписанию (будни, 07:00 UTC), только если задан секрет `OKF_SLACK_WEBHOOK` или
   `OKF_TEAMS_WEBHOOK`. Проверено на локальном мок-вебхуке; в настоящие Slack и Teams ничего не отправлялось.
@@ -310,7 +309,7 @@ After reading, confirm in one command: `okf verify "AGENTS.md#Auth" "knowledge/a
 
 **Без настроек сеть не трогается вообще.** Ресурс получает статус «unknown: connector not configured: set
 OKF_JIRA_URL», а уровень документа не меняется: ненастроенный коннектор не делает документ «сломанным».
-Так же «unknown», а не «сломано», выходит при 401, 403, 404, таймауте и недоступном хосте: на 429 и 5xx — три
+Так же «unknown», а не «сломано», выходит при 401, 403, 404, таймауте и недоступном хосте: на 429, 502, 503 и 504 — три
 повтора с паузой (`Retry-After` или 1, 2, 4 с), недоступный хост второй раз не спрашивается. Токены уходят только
 в заголовке и только на хост из `OKF_CONFLUENCE_URL` / `OKF_JIRA_URL`: ссылка на другой сайт — «unknown», без запроса.
 Ни в выводе, ни в ошибках токенов нет.
@@ -570,7 +569,7 @@ okf scan --score report/label.csv       # точность связей посл
    артефактом `okf-trust-report`;
 3. `okf fix $OKF_REPO --since ...` — предложенные правки диффом в job summary; черновики LLM (`--draft`) — только
    если в репозитории задан секрет `ANTHROPIC_API_KEY` (или `OKF_LLM_API_KEY` с переменными `OKF_LLM_BASE_URL`,
-   `OKF_LLM_MODEL`), иначе одна строка «skipped». Action сам ничего не коммитит и PR не открывает;
+   `OKF_LLM_MODEL`), иначе одна строка «skipped». Проверочная задача Action ничего не коммитит и PR не открывает (это делает только отдельная задача `auto-pr`, если её включить);
 4. `okf agents-check $OKF_REPO --base ...` — битые пути и команды в инструкциях;
 5. `okf validate $OKF_BUNDLE --strict` и `okf stale --base ...` — база знаний;
 6. отчёт в лог, в job summary и аннотациями на строки; в PR из этого же репозитория — обновляемым комментарием;

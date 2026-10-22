@@ -49,7 +49,7 @@
 ├── CLI Валидатор схемы OKF v0.2
 ├── Bundler & Scaffold, Viewer
 ├── Локальный парсинг Git-истории (git blame / log)
-├── Экстракторы: Git, wiki, Notion, Confluence, Jira, Slack (сделан Git; Confluence и Jira — в работе через интерфейс коннекторов; Notion и Slack — позже)
+├── Экстракторы: Git, wiki, Notion, Confluence, Jira, Slack (сделаны все: Git, Confluence, Jira, Notion, Slack — через общий интерфейс коннекторов; wiki — через импорт в OKF)
 └── GitHub Action и фоновый ИИ-апдейтер
 │
 ▼
@@ -121,7 +121,7 @@
 
 ---
 
-## 8. Статус спринта 1 (22.10.2026)
+## 8. Статус спринта 1 (23.10.2026)
 
 | Пункт | Статус | Где |
 |---|---|---|
@@ -129,13 +129,17 @@
 | Сборка `AGENTS.md` | ✅ | `okf agents` |
 | GitHub Action | ✅ валидация, «документ мог устареть», битые ссылки в инструкциях агентов, карта доверия, предложенные правки | `.github/workflows/okf.yml` |
 | Freshness Engine: изменение кода → связанный документ | ✅ | `okf stale`, `okf trust` |
-| Freshness Engine: ИИ правит документ и понижает доверие | ✅ правки без ИИ + черновик через ИИ (`--draft`, свой ключ); Action пока только предлагает, PR сам не открывает | `okf fix` |
-| Подтверждение «в 1 клик» | ✅ командой; уведомлений в Slack/Teams нет | `okf verify` |
-| Коннекторы | 🚧 интерфейс + Confluence и Jira в работе; Notion (неудобный API) и Slack — позже | [предложение](../../openspec/changes/add-confluence-jira-connectors/proposal.md) |
-| `okf init`, Viewer, Shadow-testing | ❌ не начаты | |
+| Freshness Engine: ИИ правит документ и понижает доверие | ✅ правки без ИИ + черновик через ИИ (`--draft`, свой ключ); правку ИИ подтверждает только человек | `okf fix`, `okf verify` |
+| Freshness Engine: ИИ открывает PR | ✅ `okf fix --pr` и опциональный автоматический PR в Action (по умолчанию выключен) | `okf fix --pr` |
+| Подтверждение «в 1 клик» | ✅ командой; напоминания в Slack/Teams тем, кто подтверждал | `okf verify`, `okf notify` |
+| Коннекторы | ✅ общий интерфейс источников + Confluence, Jira, Notion, Slack; импорт страниц Confluence и Notion (проверено на моках, без реальных аккаунтов) | `okf import`, [спека](../../openspec/specs/source-connectors/spec.md) |
+| `okf init` | ✅ каркас базы знаний; `--from-agents` собирает знания из AGENTS.md и CLAUDE.md | `okf init` |
+| Viewer | ✅ карта доверия одной страницей и сайт базы знаний с графом связей | `okf trust --html`, `okf view` |
+| Shadow-testing | ✅ контрольные вопросы агенту по роутеру (проверено на сохранённых ответах модели) | `okf shadow` |
+| Установка | ✅ одной командой из GitHub (`uvx` / `pipx`); пакет на PyPI ещё не опубликован | README, «Установка» |
 | Проба на 49 публичных репозиториях | ✅ находки в 59%, разделы «перепроверить» в 49%, битые ссылки в 35%; точность связей ещё не размечена | [examples/scan](../../examples/scan/summary.md) |
 | Интервью (10–15 по Interview-Kit) | ❌ ни одного | [Interview-Kit](Interview-Kit.md) |
-| Опросник | ✅ починен (падение на «Другое», контакт, отправка ответов, EN) в ветке `feat/interview-lab-demo` | `interview/` |
+| Опросник | ✅ починен (падение на «Другое», контакт, отправка ответов, EN) | `interview/` |
 
 Что изменилось по ходу: по итогам исследования фокус сузился на команды, где код пишут ИИ-агенты, — их инструкции (AGENTS.md, CLAUDE.md, правила Cursor) отстают от кода чаще всего. Исследование: [маркет-рисёрч](research/market-research/2026-10-22_17-16_okf-ai-market-research-result.md), [ценностное предложение](research/craft-value-proposition/2026-10-22_17-41_okf-ai-craft-value-proposition-result.md), [PRD](research/product-requirements/2026-10-22_18-04_okf-ai-product-requirements-result.md), [конкуренты](competitor_analysis.md).
 

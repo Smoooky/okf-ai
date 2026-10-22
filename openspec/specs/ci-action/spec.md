@@ -1,7 +1,7 @@
 # CI Action Specification
 
 ## Purpose
-GitHub Action `.github/workflows/okf.yml` запускает проверки okf-ai на каждом pull request и push в `main`: тесты, карту доверия, предложенные правки, страж инструкций и базы знаний — и собирает отчёт в лог, job summary, аннотации и обновляемый комментарий PR. Action только сообщает и предлагает: он ничего не коммитит и не открывает PR.
+GitHub Action `.github/workflows/okf.yml` запускает проверки okf-ai на каждом pull request и push в `main`: тесты, карту доверия, предложенные правки, контрольные вопросы, страж инструкций и базы знаний — и собирает отчёт в лог, job summary, аннотации, обновляемый комментарий PR и страницу-артефакт. Задача проверки только сообщает и предлагает: она ничего не коммитит и не открывает PR. По желанию задание `auto-pr` превращает правки в pull request `[OKF-Update]`, а задание `notify` по расписанию напоминает подтверждавшим, что пора перепроверить.
 
 ## Requirements
 
@@ -69,7 +69,7 @@ Workflow SHALL брать папку инструкций из `OKF_REPO`, ба�
 - THEN команда — `okf trust $OKF_REPO` без `--since`, раздел отчёта — `okf trust: trust map`
 
 ### Requirement: Правки только предлагаются
-Action MUST NOT коммитить, пушить или открывать pull request: `okf fix` запускается без `--apply`, а его дифф попадает в отчёт в раздел `okf fix: proposed changes (not committed)`.
+Задача `Agent instructions and knowledge` MUST NOT коммитить, пушить или открывать pull request: `okf fix` запускается без `--apply` и `--pr`, а его дифф попадает в отчёт в раздел `okf fix: proposed changes (not committed)`.
 
 #### Scenario: Есть механическая правка
 - GIVEN в инструкциях упомянут переехавший файл
@@ -150,3 +150,94 @@ Workflow SHALL собирать отчёт `okf-report.md` с маркером `
 - GIVEN `okf validate --strict` нашёл ERROR
 - WHEN завершается задача
 - THEN задача падает после публикации отчёта
+
+### Requirement: Запуск по расписанию и вручную
+Workflow SHALL также запускаться по расписанию `0 7 * * 1-5` (будни, 07:00 UTC) и вручную (`workflow_dispatch` с булевым входом `okf-auto-pr`, по умолчанию `false`), причём задача `Agent instructions and knowledge` по расписанию не запускается.
+
+#### Scenario: Запуск по расписанию
+- GIVEN наступило время расписания
+- WHEN GitHub обрабатывает событие `schedule`
+- THEN задача `knowledge` пропускается, а запускается задача `notify`
+
+#### Scenario: Ручной запуск
+- GIVEN пользователь нажал Run workflow, не отметив `okf-auto-pr`
+- WHEN GitHub обрабатывает событие `workflow_dispatch`
+- THEN задание `auto-pr` не запускается
+
+### Requirement: Страница карты доверия артефактом
+Задача `Agent instructions and knowledge` SHALL записывать карту доверия страницей `okf trust "$OKF_REPO" --html report.html` (в PR — с `--since origin/<base>`) и загружать её артефактом `okf-trust-report` даже при упавших шагах, а если страницы нет — ничего не загружать без ошибки.
+
+#### Scenario: Pull request
+- GIVEN pull request в `main`
+- WHEN выполняется задача `knowledge`
+- THEN среди артефактов запуска есть `okf-trust-report` с `report.html` о том, что этот PR делает «перепроверить»
+
+#### Scenario: Шаг упал раньше
+- GIVEN шаг до записи страницы упал и `report.html` не создан
+- WHEN выполняется шаг загрузки артефакта
+- THEN шаг не падает и артефакт не загружается
+
+### Requirement: Автоматический pull request выключен по умолчанию
+Задание `auto-pr` SHALL запускаться только на push в `main` при переменной репозитория `OKF_AUTO_PR` равной `true` или при ручном запуске с `okf-auto-pr`, и выполнять `okf fix "$OKF_REPO" --pr` (с `--draft`, если задан `ANTHROPIC_API_KEY` или все три `OKF_LLM_API_KEY`, `OKF_LLM_BASE_URL` и `OKF_LLM_MODEL`) на полной истории git.
+
+#### Scenario: Переменная не задана
+- GIVEN в репозитории нет переменной `OKF_AUTO_PR`
+- WHEN происходит push в `main`
+- THEN задание `auto-pr` не запускается
+
+#### Scenario: Включено переменной
+- GIVEN `OKF_AUTO_PR=true`, в `main` упомянут переехавший файл
+- WHEN происходит push в `main`
+- THEN `okf fix --pr` открывает pull request `[OKF-Update]` или обновляет уже открытый
+
+#### Scenario: Pull request
+- GIVEN `OKF_AUTO_PR=true`
+- WHEN GitHub обрабатывает событие `pull_request`
+- THEN задание `auto-pr` не запускается
+
+### Requirement: Права задания auto-pr
+Задание `auto-pr` SHALL запрашивать только права `contents: write` и `pull-requests: write` и передавать `okf fix --pr` токен запуска как `GH_TOKEN`.
+
+#### Scenario: Конфигурация задания
+- GIVEN файл workflow
+- WHEN читается задание `auto-pr`
+- THEN `permissions` равен `{contents: write, pull-requests: write}`, а у шага `okf fix --pr` `GH_TOKEN: ${{ github.token }}`
+
+### Requirement: Напоминания по расписанию
+Задача `notify` SHALL запускаться только по расписанию с правами `contents: read` и выполнять `okf notify "$OKF_REPO"` на полной истории git, только если задан секрет `OKF_SLACK_WEBHOOK` или `OKF_TEAMS_WEBHOOK`, а без них все её шаги пропускаются.
+
+#### Scenario: Секрет не задан
+- GIVEN в репозитории нет секретов вебхуков
+- WHEN срабатывает расписание
+- THEN шаги задачи `notify` пропускаются, ничего не отправляется
+
+#### Scenario: Задан вебхук Slack
+- GIVEN задан секрет `OKF_SLACK_WEBHOOK`
+- WHEN срабатывает расписание
+- THEN `okf notify` отправляет напоминания тем, кто подтверждал разделы, которые теперь «перепроверить»
+
+### Requirement: Контрольные вопросы в отчёте
+Задача `Agent instructions and knowledge` SHALL запускать `okf shadow "$OKF_REPO"` (в PR — с `--base origin/<base>`), только если есть `$OKF_REPO/.okf/shadow.yml` и ключ LLM, никогда не валить из-за него проверку и добавлять в отчёт раздел `okf shadow: control questions` с результатом или строкой `No control questions in $OKF_REPO/.okf/shadow.yml.` либо `Shadow test skipped: no LLM key.`.
+
+#### Scenario: Вопросов нет
+- GIVEN в `$OKF_REPO/.okf/` нет `shadow.yml`
+- WHEN выполняется шаг `okf shadow`
+- THEN `okf shadow` не запускается, а в разделе отчёта строка `No control questions in …`
+
+#### Scenario: Вопросы есть, ключа нет
+- GIVEN `shadow.yml` есть, секреты LLM не заданы
+- WHEN выполняется шаг `okf shadow`
+- THEN в разделе отчёта `Shadow test skipped: no LLM key.`
+
+#### Scenario: Вопрос стал хуже в PR
+- GIVEN `shadow.yml` и ключ LLM заданы, PR сделал документ «перепроверить»
+- WHEN выполняется шаг `okf shadow`
+- THEN в разделе отчёта строка `worse than origin/<base>`, а задача не падает из-за этого
+
+### Requirement: Коннекторы из настроек репозитория
+Задачи `knowledge`, `auto-pr` и `notify` SHALL передавать okf настройки коннекторов из переменных репозитория (`OKF_CONFLUENCE_URL`, `OKF_JIRA_URL`, `OKF_ATLASSIAN_EMAIL`) и секретов (`OKF_ATLASSIAN_TOKEN`, `OKF_ATLASSIAN_PAT`, `OKF_NOTION_TOKEN`, `OKF_SLACK_TOKEN`), так что без них шаги работают только по git и в сеть к этим системам не ходят.
+
+#### Scenario: Настроек нет
+- GIVEN ни переменные, ни секреты коннекторов не заданы
+- WHEN выполняется workflow
+- THEN удалённые источники документов получают статус `unknown: connector not configured`, а уровни карты считаются по git
