@@ -235,6 +235,10 @@ okf scan --score report/label.csv       # точность связей посл
   section, source, type, extracted_from, status, correct, comment, url`. Человек заполняет `correct`: да / нет / неясно.
   `--score` считает долю «да» среди размеченных, отдельно по типам связей (путь, npm-скрипт, make, скрипт).
 
+**Первый прогон** (22.10.2026, 49 публичных репозиториев с AGENTS.md / CLAUDE.md): хотя бы одна находка —
+в 59%, раздел «перепроверить» — в 49%, ссылка на несуществующее — в 35%. Подробности и оговорки — в
+[examples/scan](examples/scan/README.md); точность связей появится после разметки `label.csv`.
+
 ## GitHub Action
 
 [`.github/workflows/okf.yml`](.github/workflows/okf.yml) на каждый pull request и push в `main`:
