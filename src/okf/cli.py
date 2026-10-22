@@ -17,7 +17,7 @@ from okf.git import (
     SHALLOW_HINT, Change, GitError, History, changed_paths, changes_since, merge_base, toplevel, web_base,
 )
 from okf.fix import KEY_HELP, FixError, ReplayProvider, apply, plan_drafts, plan_fixes, provider_from_env, render
-from okf.importer import import_confluence
+from okf.importer import import_confluence, import_notion
 from okf.notify import NotifyError, load_people, plain, reminders, send, slack_message, teams_message
 from okf.pr import PrError, open_pr
 from okf.instructions import check_repository
@@ -27,6 +27,7 @@ from okf.schema import get_profile
 from okf.sources import Unavailable, registry
 from okf.sources.base import day
 from okf.sources.confluence import ConfluenceSource
+from okf.sources.notion import NotionSource
 from okf.stale import find_stale, normalize_repo_path
 from okf.trust import (
     TrustError, build_map, default_actor, knowledge_units, machine_edited, unit_json, verify, verify_units,
@@ -139,10 +140,12 @@ def _parser() -> argparse.ArgumentParser:
     notify.add_argument("--dry-run", action="store_true", help="print the messages, send nothing")
     _add_now(notify)
 
-    importer = commands.add_parser("import", help="bring knowledge from Confluence into git as OKF documents")
-    importer.add_argument("system", choices=["confluence"], help="where from")
-    importer.add_argument("--space", metavar="KEY", help="every page of this space")
-    importer.add_argument("--page", action="append", default=[], metavar="ID", help="only this page (repeatable)")
+    importer = commands.add_parser("import", help="bring knowledge from Confluence or Notion into git as OKF documents")
+    importer.add_argument("system", choices=["confluence", "notion"], help="where from")
+    importer.add_argument("--space", metavar="KEY", help="Confluence: every page of this space")
+    importer.add_argument("--page", action="append", default=[], metavar="ID",
+                          help="this page, an id or a URL (repeatable)")
+    importer.add_argument("--recursive", action="store_true", help="Notion: also the child pages")
     importer.add_argument("--out", required=True, metavar="DIR", help="bundle directory to write to")
     importer.add_argument("--type", metavar="TYPE", help="OKF type of new documents (default: the file's, else Guide)")
     importer.add_argument("--limit", type=int, default=200, help="at most this many pages (default: 200)")
@@ -528,26 +531,32 @@ def _view(args: argparse.Namespace) -> int:
 
 
 def _import(args: argparse.Namespace) -> int:
-    if not args.space and not args.page:
-        print("okf: error: name a space (--space KEY) or pages (--page ID)", file=sys.stderr)
+    notion = args.system == "notion"
+    if not args.page and (notion or not args.space):
+        need = "pages (--page ID)" if notion else "a space (--space KEY) or pages (--page ID)"
+        print(f"okf: error: name {need}", file=sys.stderr)
         return 2
-    connector = next(c for c in registry().connectors if isinstance(c, ConfluenceSource))
+    out = Path(args.out)
+    root = toplevel(out.parent if not out.exists() else out) or Path.cwd()
+    kind = NotionSource if notion else ConfluenceSource
+    connector = next(c for c in registry(root=root).connectors if isinstance(c, kind))
     problem = connector.unconfigured()
     if problem:
         print(f"okf import: {problem}", file=sys.stderr)
         return 2
-    out = Path(args.out)
     try:
-        done = import_confluence(connector, out, args.space, args.page, args.type, args.limit, _now(args))
+        if notion:
+            done = import_notion(connector, out, args.page, args.recursive, args.type, args.limit, _now(args), root)
+        else:
+            done = import_confluence(connector, out, args.space, args.page, args.type, args.limit, _now(args))
     except Unavailable as exc:
-        print(f"okf import: Confluence: {exc}", file=sys.stderr)
+        print(f"okf import: {args.system}: {exc}", file=sys.stderr)
         return 1
     for item in done:
         at = f", {day(item.page.at)}" if item.page.at else ""
-        print(f"okf import: {item.action}: {display_path(item.path)} (page {item.page.id} v{item.page.version}{at})",
-              file=sys.stderr)
+        print(f"okf import: {item.action}: {display_path(item.path)} ({item.page.label}{at})", file=sys.stderr)
     written = sum(item.action != "unchanged" for item in done)
-    where = f"space {args.space}" if args.space and not args.page else "Confluence"
+    where = f"space {args.space}" if args.space and not args.page else ("Notion" if notion else "Confluence")
     after = "; they stay not verified until okf verify" if written else ""
     print(f"okf import: {len(done)} pages from {where}, {written} written to {display_path(out)}{after}",
           file=sys.stderr)

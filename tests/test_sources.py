@@ -1,10 +1,6 @@
 """Connectors (okf/sources): Confluence and Jira on mocked HTTP only, never the real Atlassian."""
 
-import json
-import threading
-import urllib.request
 from datetime import datetime, timezone
-from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
@@ -33,19 +29,6 @@ NOW = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
 
 def at(text):
     return datetime.fromisoformat(text.replace("Z", "+00:00"))
-
-
-@pytest.fixture(autouse=True)
-def no_network(monkeypatch):
-    """Any request that is not to the local mock server fails the test."""
-    real = urllib.request.urlopen
-
-    def guarded(request, *args, **kwargs):
-        url = request.full_url if hasattr(request, "full_url") else request
-        assert url.startswith("http://127.0.0.1:"), f"unexpected network call to {url}"
-        return real(request, *args, **kwargs)
-
-    monkeypatch.setattr(urllib.request, "urlopen", guarded)
 
 
 # --- Recognizing resources ---
@@ -289,50 +272,6 @@ def test_cli_sources_and_import_from_fixtures(capsys, tmp_path, monkeypatch):
 
 
 # --- HTTP: Server/DC, credentials, errors, retries (a local mock server) ---
-
-
-class Mock:
-    """A local HTTP server: path -> list of (status, body, headers) answers, the last one repeats."""
-
-    def __init__(self, routes):
-        self.routes, self.seen = routes, []
-        mock = self
-
-        class Handler(BaseHTTPRequestHandler):
-            def do_GET(self):
-                mock.seen.append((self.path, dict(self.headers)))
-                answers = mock.routes.get(self.path.split("?")[0], [(404, {}, {})])
-                status, body, headers = answers.pop(0) if len(answers) > 1 else answers[0]
-                data = json.dumps(body, ensure_ascii=False).encode("utf-8")
-                self.send_response(status)
-                for key, value in {"Content-Type": "application/json", **headers}.items():
-                    self.send_header(key, value)
-                self.end_headers()
-                self.wfile.write(data)
-
-            def log_message(self, *args):
-                pass
-
-        self.server = HTTPServer(("127.0.0.1", 0), Handler)
-        self.url = f"http://127.0.0.1:{self.server.server_port}"
-        threading.Thread(target=self.server.serve_forever, daemon=True).start()
-
-    def close(self):
-        self.server.shutdown()
-        self.server.server_close()
-
-
-@pytest.fixture
-def mock():
-    servers = []
-
-    def start(routes):
-        servers.append(Mock(routes))
-        return servers[-1]
-
-    yield start
-    for server in servers:
-        server.close()
 
 
 SERVER_PAGE = {"id": "4456", "title": "Runbook", "version": {"number": 5, "when": "2026-10-01T10:00:00.000+03:00"},

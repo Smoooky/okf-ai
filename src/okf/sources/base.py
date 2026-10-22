@@ -54,6 +54,7 @@ class Source:
 
     name = ""  # short id: "confluence", "jira"
     settings = ""  # what to set, shown in "connector not configured: <settings>"
+    root = None  # the repository root, for connectors that keep files in it (Notion snapshots)
 
     def __init__(self, env: Mapping[str, str], http=None):
         self.env = env

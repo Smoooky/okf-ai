@@ -19,8 +19,9 @@ from okf.sources.confluence import ConfluenceSource
 from okf.sources.git import GitSource
 from okf.sources.http import Http
 from okf.sources.jira import JiraSource
+from okf.sources.notion import NotionSource
 
-CONNECTORS: list[type[Source]] = [ConfluenceSource, JiraSource]
+CONNECTORS: list[type[Source]] = [ConfluenceSource, JiraSource, NotionSource]
 
 __all__ = ["CONNECTORS", "Check", "GitSource", "Registry", "Signal", "Source", "Unavailable", "registry"]
 
@@ -75,4 +76,7 @@ def registry(env: Mapping[str, str] | None = None, root: Path | None = None, his
     them touches the network."""
     env = os.environ if env is None else env
     http = http or Http(env)
-    return Registry([cls(env, http) for cls in CONNECTORS], GitSource(root, history))
+    connectors = [cls(env, http) for cls in CONNECTORS]
+    for connector in connectors:
+        connector.root = Path(root).resolve() if root else None
+    return Registry(connectors, GitSource(root, history))
