@@ -120,9 +120,8 @@ def instruction_units(root: Path, history: History) -> list[Unit]:
         for title, start, end in sections(text):
             inside = [r for r in found.references if start <= r.line <= end]
             unit = Unit(_unit_name(instruction.path, root, title), instruction.path, title, start, "instruction")
-            # Globs (`src/**/*.py`, Cursor `globs:`) say where a rule applies, not what code it describes.
-            unit.sources = _unique(s for r in inside for s in r.sources if "*" not in str(s))
-            unit.touched = _unique([*unit.sources, *(c for r in inside for c in r.candidates)])
+            unit.sources = instruction_sources(inside)
+            unit.touched = _unique([*unit.sources, *(c for r in inside for c in r.candidates if not c.is_dir())])
             unit.broken = [r.missing for r in inside if r.missing]
             unit.text_hash = section_hash(lines[start - 1 : end])
             edited = [d for d in dates[start - 1 : end] if d is not None]
@@ -134,6 +133,15 @@ def instruction_units(root: Path, history: History) -> list[Unit]:
                     unit.recorded_hash = record.get("hash")
             units.append(unit)
     return units
+
+
+def instruction_sources(found: list) -> list[Path]:
+    """The files a part of an instruction describes.
+
+    Globs (`src/**/*.py`, Cursor `globs:`) and directories (`src/`) say where something lives or
+    applies, not which code it describes: every change under them would ask for a recheck.
+    """
+    return _unique(s for r in found for s in r.sources if "*" not in str(s) and not Path(s).is_dir())
 
 
 def knowledge_units(root: Path, history: History, bundles: list[Path] | None = None) -> list[Unit]:
@@ -376,7 +384,7 @@ def _verify_instruction(instruction: InstructionFile, section: str | None, by: s
     names = []
     for title, start, end in chosen:
         inside = [r for r in found.references if start <= r.line <= end]
-        sources = sorted({_relative(s, sidecar.base) for r in inside for s in r.sources})
+        sources = sorted({_relative(s, sidecar.base) for s in instruction_sources(inside)})
         name = _unit_name(instruction.path, sidecar.base, title)
         sidecar.add(name, by, stamp, sources, section_hash(lines[start - 1 : end]))
         names.append(name)

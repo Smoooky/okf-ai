@@ -123,8 +123,17 @@ def test_sources_come_from_paths_commands_and_links(repo):
     }).commit("2026-09-01T10:00:00Z")
     unit = repo.unit("AGENTS.md#Work")
     assert sorted(Path(s).relative_to(repo.root.resolve()).as_posix() for s in unit.sources) == [
-        "Makefile", "package.json", "src", "src/auth.py", "src/billing.py",
+        "Makefile", "package.json", "src/auth.py", "src/billing.py",  # not the directory, not the glob
     ]
+
+
+def test_directory_mentions_do_not_ask_for_rechecks(repo):
+    code_repo(repo).write({"AGENTS.md": "## Layout\n\nCode is in `src/`.\n"}).commit("2026-09-01T10:00:00Z")
+    repo.write({"src/auth.py": "TTL = 7\n"}).commit("2026-10-20T10:00:00Z")
+    assert repo.unit("AGENTS.md#Layout").level == "unverified"
+    assert repo.map(changes=[Change("M", "src/auth.py")]).units[0].in_change == []
+    shutil.rmtree(repo.root / "src")
+    assert repo.unit("AGENTS.md#Layout").level == "broken"
 
 
 def test_never_verified_and_nothing_changed_is_unverified(repo):
