@@ -9,6 +9,24 @@ description = "Keep instructions for AI agents (AGENTS.md, CLAUDE.md, Cursor rul
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["PyYAML>=6.0"]
+keywords = ["agents", "AGENTS.md", "CLAUDE.md", "cursor", "knowledge", "okf", "documentation", "llm"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Documentation",
+    "Topic :: Software Development :: Quality Assurance",
+]
+
+[project.urls]
+Homepage = "https://github.com/Smoooky/okf-ai"
+Repository = "https://github.com/Smoooky/okf-ai"
+Issues = "https://github.com/Smoooky/okf-ai/issues"
 
 [project.optional-dependencies]
 llm = ["anthropic>=2.1"]  # okf fix --draft with Claude

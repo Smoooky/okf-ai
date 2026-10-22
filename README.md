@@ -22,24 +22,35 @@
 
 ## Установка
 
-Нужен Python 3.10+ и Git.
+Одна команда, без установки и без PyPI — карта доверия текущего репозитория:
+
+```bash
+uvx --from git+https://github.com/Smoooky/okf-ai okf trust .
+```
+
+Поставить насовсем — `pipx install git+https://github.com/Smoooky/okf-ai` (или `pip install git+https://…`);
+с черновиками от Claude — `pipx install "okf-ai[llm] @ git+https://github.com/Smoooky/okf-ai"`.
+Нужны Python 3.10+ и Git (проверено на 3.11 и 3.12). Ставится то, что лежит в ветке по умолчанию на GitHub;
+до слияния `feat/okf-cli` добавьте `@feat/okf-cli` к адресу. Проверено локально: `uvx` и `pip` из git-адреса
+репозитория, сборка `python -m build` и `twine check` проходят.
+
+**PyPI.** Пакет готов к публикации под именем `okf-ai` (на 22.10.2026 имя свободно): `python -m build`,
+`twine upload dist/*` — нужен аккаунт PyPI и выбранная лицензия (её пока нет). После публикации —
+`uvx --from okf-ai okf trust .` и `pipx install okf-ai`.
+
+Для разработки:
 
 ```bash
 git clone https://github.com/Smoooky/okf-ai.git
 cd okf-ai
 pip install -e ".[test]"
+python -m pytest
 ```
 
 (`.[test]` включает `anthropic` для `okf fix --draft`; в работе достаточно `pip install "okf-ai[llm]"`.)
 
 На Windows вместо `pip` и `python` — `py -3.12 -m pip` и `py -3.12`. Если папка `Scripts` не в `PATH`,
 команда `okf` не найдётся; тогда запускайте `py -3.12 -m okf ...` — это то же самое.
-
-Тесты:
-
-```bash
-python -m pytest
-```
 
 Команды печатают по строке на находку, сводка уходит в stderr:
 
