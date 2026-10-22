@@ -63,6 +63,7 @@ class Unit:
     generated_at: datetime | None = None
     stale_after: datetime | None = None
     last_edited: datetime | None = None
+    generated_by: str | None = None  # who wrote the current text: okf fix, an LLM draft, OKF `generated.by`
     level: str = "unverified"
     message: str = ""
     changed: list[tuple[str, datetime]] = field(default_factory=list)  # sources newer than the reference date
@@ -174,6 +175,9 @@ def instruction_units(root: Path, history: History) -> tuple[list[Unit], list[tu
                 if record:
                     unit.verifications = _verifications(record.get("verified"))
                     unit.recorded_hash = record.get("hash")
+                    generated = record.get("generated") if isinstance(record.get("generated"), dict) else {}
+                    unit.generated_at = parse_instant(generated.get("at"))
+                    unit.generated_by = generated.get("by")
             units.append(unit)
     return units, notes
 
@@ -221,14 +225,18 @@ def knowledge_units(root: Path, history: History, bundles: list[Path] | None = N
                 continue  # an URL
             unit.touched.extend(candidates)
             existing = [c for c in candidates if c.exists()]
+            moved = None if existing else next(filter(None, (history.moved(c) for c in candidates)), None)
             if existing:
                 unit.sources.append(existing[0])
+            elif moved:
+                unit.moved.append((resource, _relative(moved[0], root), moved[1]))
             else:
                 unit.broken.append(f'source "{resource}" does not exist')
                 unit.broken_types.append("source")
         unit.sources, unit.touched = _unique(unit.sources), _unique(unit.touched)
         unit.verifications = _verifications(doc.get("verified", None))
         unit.generated_at = parse_instant(doc.get("generated.at", None))
+        unit.generated_by = schema.generated_by(doc)
         unit.stale_after = schema.stale_after(doc)
         unit.last_edited = history.last_change(path)
         units.append(unit)
@@ -305,6 +313,12 @@ def _evaluate(unit: Unit, root: Path, history: History, changed: set[str] | None
         return result("recheck", f"{old} moved to {new}{on}; {last}", "recheck:moved")
     if unit.in_change and not unit.updated_in_change:
         return result("recheck", f"{', '.join(unit.in_change)} changed in this change; {last}", "recheck:in-change")
+    machine = unit.generated_by and not schema.is_human(unit.generated_by)
+    if machine and unit.generated_at and (latest is None or unit.generated_at > latest[0]):
+        # okf fix or an LLM draft rewrote it: lower trust until a person confirms (okf verify)
+        since = f", {last}" if latest else ""
+        return result("unverified", f"edited by {unit.generated_by} on {_day(unit.generated_at)}; not verified{since}",
+                      "unverified:generated")
     if latest is not None:
         unit.changed = [(_show(s, root), d) for s, d in dated if d > latest[0]]
         if unit.recorded_hash and unit.text_hash and unit.recorded_hash != unit.text_hash:
@@ -384,6 +398,12 @@ class Sidecar:
 
     def record(self, unit: str) -> dict | None:
         return self.units.get(unit)
+
+    def generated(self, unit: str, by: str, at: str, text_hash: str) -> None:
+        """Record that a tool rewrote the section: not a confirmation, it lowers trust until `okf verify`."""
+        record = self.units.setdefault(unit, {"unit": unit})
+        record["generated"] = {"by": by, "at": at}
+        record["generated_hash"] = text_hash
 
     def add(self, unit: str, by: str, at: str, sources: list[str], text_hash: str) -> None:
         record = self.units.setdefault(unit, {"unit": unit})
@@ -506,21 +526,32 @@ def _verify_knowledge(path: Path, by: str, stamp: str) -> None:
     if doc.meta is None or not isinstance(doc.meta.get("type"), str):
         raise TrustError(f"{path.name} is neither an agent instruction file nor an OKF document")
     entries = [dict(e) for e in schema.verifications(doc)] + [{"by": by, "at": stamp}]
-    lines = doc.text.split("\n")
-    end = front_matter_end(lines)  # 1-based line of the closing ---
     block = ["verified:"] + [f"  - {_flow(entry)}" for entry in entries]
-    start = next((i for i in range(1, end - 1) if re.match(r"^verified\s*:", lines[i])), None)
-    if start is None:
-        lines[end - 1 : end - 1] = block
-    else:
-        stop = start + 1
-        while stop < end - 1 and (not lines[stop].strip() or lines[stop][0] in " \t-"):
-            stop += 1
-        lines[start:stop] = block
-    path.write_text("\n".join(lines), encoding="utf-8", newline="\n")
+    path.write_text("\n".join(replace_front_matter_key(doc.text.split("\n"), "verified", block)),
+                    encoding="utf-8", newline="\n")
     check = load_document(path, path.parent)
     if check.meta is None or len(schema.verifications(check)) != len(entries):
         raise TrustError(f"could not update verified in {path.name}: {check.meta_error}")
+
+
+def set_generated(lines: list[str], by: str, stamp: str) -> list[str]:
+    """OKF `generated` set to who rewrote the document and when (`verified` is left alone)."""
+    return replace_front_matter_key(lines, "generated", [f"generated: {_flow({'by': by, 'at': stamp})}"])
+
+
+def replace_front_matter_key(lines: list[str], key: str, block: list[str]) -> list[str]:
+    """Replace a top-level front matter key and its indented lines with `block`, or add it at the end."""
+    lines = list(lines)
+    end = front_matter_end(lines)  # 1-based line of the closing ---
+    start = next((i for i in range(1, end - 1) if re.match(rf"^{re.escape(key)}\s*:", lines[i])), None)
+    if start is None:
+        lines[end - 1 : end - 1] = block
+        return lines
+    stop = start + 1
+    while stop < end - 1 and (not lines[stop].strip() or lines[stop][0] in " \t-"):
+        stop += 1
+    lines[start:stop] = block
+    return lines
 
 
 def _flow(entry: dict) -> str:

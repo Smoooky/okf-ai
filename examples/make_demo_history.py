@@ -46,6 +46,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  cd {target}")
     print("  okf trust                                   # the trust map")
     print("  git switch pr/billing-tariff && okf trust --since main && git switch main")
+    print("  okf fix                                     # mechanical fixes as a diff")
+    print("  okf fix --draft --only AGENTS.md#Auth --replay .okf/auth_draft.example.json   # a saved example answer")
     return 0
 
 
@@ -93,6 +95,8 @@ def build(target: Path) -> None:
                        encoding="utf-8")
     git.commit("2026-10-22T09:00:00Z", "Raise the per-minute price to 9 RUB", "human:maria_backend")
     git("checkout", "-q", "main")
+    # A hand-written example of a model answer for `okf fix --draft --replay` (not committed).
+    shutil.copy(HERE / "demo-pr" / "auth_draft.example.json", target / ".okf" / "auth_draft.example.json")
 
 
 class _Git:

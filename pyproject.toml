@@ -11,7 +11,8 @@ requires-python = ">=3.10"
 dependencies = ["PyYAML>=6.0"]
 
 [project.optional-dependencies]
-test = ["pytest>=7"]
+llm = ["anthropic>=2.1"]  # okf fix --draft with Claude
+test = ["pytest>=7", "anthropic>=2.1"]
 
 [project.scripts]
 okf = "okf.cli:main"

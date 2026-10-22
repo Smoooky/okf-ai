@@ -1,0 +1,12 @@
+{
+  "note": "EXAMPLE, written by hand for offline demos: what a model answer for `okf fix --draft` looks like. It was not produced by a model call. Use it with `okf fix --draft --replay` in the repository made by examples/make_demo_history.py; okf still checks every path and command in it.",
+  "provider": "anthropic",
+  "model": "claude-opus-5-5",
+  "units": {
+    "AGENTS.md#Auth": {
+      "section": "## Auth\n\n- Вход по SMS и JWT-токены — `src/auth.py`.\n- Секрет подписи — `WHEELO_JWT_SECRET`, его читает `src/config.py`.\n- Refresh-токен живёт 30 дней; после 5 неверных кодов номер блокируется на 15 минут.\n- Каждая попытка входа в заблокированный номер пишется в лог `wheelo.auth` (уровень warning).\n",
+      "summary": "src/auth.py now logs locked logins to the wheelo.auth logger; the section says so, the rest still holds.",
+      "changed": true
+    }
+  }
+}

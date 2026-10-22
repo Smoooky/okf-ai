@@ -8,6 +8,8 @@
 что перепроверить и где ссылки ведут в никуда.
 
 - `okf trust` — карта доверия по разделам инструкций и файлам базы знаний; `okf verify` — подтвердить раздел в одно действие;
+- `okf fix` — правки: механические без ИИ (переехавший файл, переименованный скрипт) и черновики от LLM для разделов,
+  чей код поменялся (`--draft`, свой ключ); правленое остаётся «не подтверждено», пока человек не сделает `okf verify`;
 - `okf agents-check` и `okf stale` — страж в PR: битые пути и команды в инструкциях, документы, чей код поменялся;
 - `okf validate` — валидатор базы знаний [OKF v0.2](https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md)
   плюс строгий профиль okf-ai ([спека](etc/spec/cli-validator-v2.md)); `okf agents` — роутер `AGENTS.md` для бандла;
@@ -24,6 +26,8 @@ git clone https://github.com/Smoooky/okf-ai.git
 cd okf-ai
 pip install -e ".[test]"
 ```
+
+(`.[test]` включает `anthropic` для `okf fix --draft`; в работе достаточно `pip install "okf-ai[llm]"`.)
 
 На Windows вместо `pip` и `python` — `py -3.12 -m pip` и `py -3.12`. Если папка `Scripts` не в `PATH`,
 команда `okf` не найдётся; тогда запускайте `py -3.12 -m okf ...` — это то же самое.
@@ -111,6 +115,36 @@ okf verify --all-current                  # все неподтверждённ�
 - Для OKF дописывает запись в `verified` в шапке, остальной файл не меняется.
 - `--by` по умолчанию — `human:` + `git config user.email` (или `user.name`). Раздел ищется по точному заголовку,
   без учёта регистра или по slug (`#getting-started`).
+
+## `okf fix [repo] [--draft] [--apply]`
+
+Правит то, что нашли `okf trust` и `okf agents-check`. По умолчанию печатает unified diff (`okf fix > fix.patch`,
+`git apply fix.patch`), с `--apply` пишет в рабочую копию. Сами инструкции правятся только точечной заменой
+в строке, без переформатирования.
+
+**Слой 1 — без ИИ, всегда:**
+- упомянутый файл переехал (`git log`, или переименование в PR с `--since`) → новый путь в том же виде
+  (`./scripts/seed_db.sh` → `./scripts/seed.sh`, выравнивание комментария сохраняется);
+- скрипт в `package.json` переименован (та же команда теперь под одним другим именем) → новое имя;
+- источник OKF (`sources[].resource`) переехал → новый путь во frontmatter;
+- путь удалён без замены или скрипта не было → правка не выдумывается: «needs a manual fix».
+
+**Слой 2 — `--draft`, черновик от LLM** для разделов, чей код менялся после подтверждения:
+- модели передаются текст раздела, его источники и `git diff` источников с момента последнего подтверждения;
+  в ответ — новый текст раздела и одна строка «что поменялось и почему» (структурированный JSON);
+- модель правит только этот раздел; заголовок менять нельзя; каждый путь и команда в черновике проверяются тем же
+  извлечением, что в `agents-check`, — несуществующее отклоняет черновик с причиной;
+- дифф больше `--max-diff` (40 000 символов) не обрезается молча, а не отправляется; лимит ответа — `OKF_LLM_MAX_TOKENS` (8000);
+- ключ — свой: `ANTHROPIC_API_KEY` (Claude через официальный SDK, `pip install "okf-ai[llm]"`, модель по умолчанию
+  `claude-opus-5-5`, меняется через `OKF_LLM_MODEL`; включён серверный `fallbacks: "default"` на случай отказа модели)
+  или OpenAI-совместимый эндпоинт: `OKF_LLM_BASE_URL` + `OKF_LLM_API_KEY` + `OKF_LLM_MODEL` (там `temperature: 0`;
+  модели Claude параметр `temperature` больше не принимают, детерминизм держится на проверке черновика);
+- без ключа `okf fix --draft` говорит, что задать, и показывает только слой 1;
+- `--replay FILE` подставляет сохранённый ответ вместо вызова модели (демо, тесты); `--only AGENTS.md#Auth` — один раздел.
+
+**Доверие после правки.** Каждый правленый раздел получает `generated: {by: process:okf-fix | anthropic/<модель>, at}` —
+в `.okf/trust.yml` для инструкций, во frontmatter для OKF — и никогда `verified`. В карте доверия он «не подтверждён»
+(`edited by … ; not verified`), пока человек не сделает `okf verify`: ИИ правит и понижает доверие, человек подтверждает.
 
 ## `okf agents-check [repo] [--strict] [--changed FILE...] [--base REF]`
 
@@ -246,9 +280,12 @@ okf scan --score report/label.csv       # точность связей посл
 1. pytest;
 2. `okf trust $OKF_REPO --since origin/<базовая ветка>` — какие разделы инструкций и документы знаний этот PR
    делает «перепроверить», с указанием изменённого файла; на push — вся карта;
-3. `okf agents-check $OKF_REPO --base ...` — битые пути и команды в инструкциях;
-4. `okf validate $OKF_BUNDLE --strict` и `okf stale --base ...` — база знаний;
-5. отчёт в лог, в job summary и аннотациями на строки; в PR из этого же репозитория — обновляемым комментарием.
+3. `okf fix $OKF_REPO --since ...` — предложенные правки диффом в job summary; черновики LLM (`--draft`) — только
+   если в репозитории задан секрет `ANTHROPIC_API_KEY` (или `OKF_LLM_API_KEY` с переменными `OKF_LLM_BASE_URL`,
+   `OKF_LLM_MODEL`), иначе одна строка «skipped». Action сам ничего не коммитит и PR не открывает;
+4. `okf agents-check $OKF_REPO --base ...` — битые пути и команды в инструкциях;
+5. `okf validate $OKF_BUNDLE --strict` и `okf stale --base ...` — база знаний;
+6. отчёт в лог, в job summary и аннотациями на строки; в PR из этого же репозитория — обновляемым комментарием.
 
 Ошибки валят проверку, предупреждения — нет. Чтобы подключить к своему репозиторию, скопируйте файл
 и поменяйте `OKF_REPO` (обычно `.`) и `OKF_BUNDLE`; `OKF_AGENTS_ARGS: --strict` сделает битые ссылки в инструкциях ошибками.
@@ -309,21 +346,62 @@ okf trust: 16 units: 6 verified and current, 7 to recheck, 1 broken, 2 not verif
 
 На GitHub это же попадает в job summary и комментарий PR (шаг `okf trust --since origin/<base>` в Action).
 
-**3. Тимлид перечитал раздел Auth — всё ещё верно; чиним сломанное — всё зелёное:**
+**3. okf-ai само предлагает правки:**
 
 ```bash
 git switch main
-sed -i 's/seed_db.sh/seed.sh/' AGENTS.md
+okf fix
+```
+
+```diff
+--- a/AGENTS.md
++++ b/AGENTS.md
+@@ -11,7 +11,7 @@
+-./scripts/seed_db.sh      # тестовые данные
++./scripts/seed.sh         # тестовые данные
+```
+```text
+okf fix: AGENTS.md#Команды: ./scripts/seed_db.sh moved to ./scripts/seed.sh
+okf fix: CLAUDE.md (line 6): "npm run test:unit": no script "test:unit" in package.json: needs a manual fix
+```
+
+Переехавший скрипт исправлен без ИИ; несуществующий npm-скрипт okf не выдумывает. Для раздела Auth, чей код поменялся,
+черновик пишет модель — на демо без ключа берём заранее сохранённый пример ответа (`.okf/auth_draft.example.json`,
+помечен как пример; okf всё равно проверяет в нём каждый путь и команду):
+
+```bash
+okf fix --apply
+okf fix --draft --only AGENTS.md#Auth --replay .okf/auth_draft.example.json --apply
+```
+
+```diff
+ - Refresh-токен живёт 30 дней; после 5 неверных кодов номер блокируется на 15 минут.
++- Каждая попытка входа в заблокированный номер пишется в лог `wheelo.auth` (уровень warning).
+```
+```text
+okf fix --draft: AGENTS.md#Auth: src/auth.py now logs locked logins to the wheelo.auth logger; the section says so, the rest still holds. (by anthropic/claude-opus-5-5; not verified)
+```
+
+С ключом то же делает `okf fix --draft` (`ANTHROPIC_API_KEY`). Правки ИИ и okf понижают доверие, а не повышают:
+
+```text
+[INFO] AGENTS.md#Команды: trust: edited by process:okf-fix on 2026-10-22; not verified
+[INFO] AGENTS.md#Auth: trust: edited by anthropic/claude-opus-5-5 on 2026-10-22; not verified, last verified 2026-09-05 by human:teamlead_ivan
+```
+
+**4. Тимлид прочитал правки и подтвердил; ручную правку CLAUDE.md сделал сам — всё зелёное:**
+
+```bash
 sed -i 's/npm run test:unit/npm test/' CLAUDE.md
-okf verify AGENTS.md#Auth knowledge/auth_flow.md
+okf verify "AGENTS.md#Команды" AGENTS.md#Auth knowledge/auth_flow.md
 okf trust --strict
 ```
 
 ```text
-okf trust: 16 units: 11 verified and current, 0 to recheck, 0 broken, 5 not verified
+okf trust: 16 units: 12 verified and current, 0 to recheck, 0 broken, 4 not verified
 ```
 
-Код выхода `0`. `okf verify --all-current` подтвердит и оставшиеся пять, где код не менялся.
+Код выхода `0`. `okf verify --all-current` подтвердит и оставшиеся четыре, где код не менялся.
 
 ### Страж в PR: инструкции агентов (1 минута)
 
@@ -361,7 +439,7 @@ okf validate examples/demo/knowledge --strict && okf agents examples/demo/knowle
 ## Структура
 
 ```text
-src/okf/        trust.py (карта доверия, verify), scan.py (проба), instructions.py (agents-check), schema.py (поля и правила OKF,
+src/okf/        trust.py (карта доверия, verify), fix.py (правки и черновики), scan.py (проба), instructions.py (agents-check), schema.py (поля и правила OKF,
                 профили okf и strict), validate.py, stale.py, agents.py, bundle.py, git.py, cli.py
 tests/          pytest; fixtures/okf-official — официальный пример acme_retail (Apache-2.0)
 examples/       demo (мини-репозиторий + knowledge/), make_demo_history.py, demo-pr, broken

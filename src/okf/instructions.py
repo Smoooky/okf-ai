@@ -723,6 +723,9 @@ class Reference:
     moved_to: Path | None = None
     moved_at: datetime | None = None
     origin: str = ""  # "import" for CLAUDE.md @imports
+    moved_from: Path | None = None  # the candidate git saw renamed
+    name: str = ""  # the script, target or recipe a command needs
+    manifest: Path | None = None  # the package.json, Makefile or justfile looked at
 
     @property
     def missing(self) -> str | None:
@@ -791,7 +794,8 @@ def references(instruction: InstructionFile, repository: Repository, text: str |
                 if target.kind == "make" and manifest is None and repository.generates_makefiles():
                     message, status = None, "unknown"  # CMake, autotools or meson write the Makefile
                 found.append(Reference(mention.line, "command", f'"{command}"', problem=message,
-                                       sources=(manifest,) if manifest else (), type=kind, status=status))
+                                       sources=(manifest,) if manifest else (), type=kind, status=status,
+                                       name=target.name, manifest=manifest))
                 if target.kind == "script":
                     facts.managers.add(target.runner)
                     family = "script"
@@ -834,7 +838,8 @@ def _file_reference(line: int, field: str, subject: str, path: str, candidates: 
     for candidate in candidates:
         moved = repository.moved(candidate)
         if moved:
-            return Reference(line, field, subject, status="moved", moved_to=moved[0], moved_at=moved[1], **common)
+            return Reference(line, field, subject, status="moved", moved_to=moved[0], moved_at=moved[1],
+                             moved_from=candidate, **common)
     matches = [] if path.startswith(("../", "/")) else repository.by_suffix(path)
     if len(matches) == 1:
         return Reference(line, field, subject, sources=(matches[0],), base="suffix", **common)

@@ -1,4 +1,4 @@
-"""Command line: okf trust | verify | agents-check | stale | validate | agents | scan."""
+"""Command line: okf trust | fix | verify | agents-check | stale | validate | agents | scan."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from okf.agents import render_agents
 from okf.bundle import Bundle
 from okf.report import ERROR, INFO, WARNING, Issue, display_path, format_issue
 from okf.git import SHALLOW_HINT, Change, GitError, History, changed_paths, changes_since, merge_base, toplevel
+from okf.fix import KEY_HELP, FixError, ReplayProvider, apply, plan_drafts, plan_fixes, provider_from_env, render
 from okf.instructions import check_repository
 from okf.scan import ScanError, find_repos, parse_repos, scan, score
 from okf.schema import get_profile
@@ -24,13 +25,18 @@ from okf.values import parse_now
 
 def main(argv: list[str] | None = None) -> int:
     for stream in (sys.stdout, sys.stderr):
-        if hasattr(stream, "reconfigure"):
-            stream.reconfigure(errors="replace")
+        if hasattr(stream, "reconfigure"):  # UTF-8 even through a Windows pipe (Cyrillic section titles)
+            stream.reconfigure(encoding="utf-8", errors="replace")
     args = _parser().parse_args(argv)
     if args.command == "verify":
         return _verify(args)
     if args.command == "scan":
         return _scan(args)
+    if args.command == "fix":
+        if not Path(args.repo).is_dir():
+            print(f"okf: error: directory not found: {args.repo}", file=sys.stderr)
+            return 2
+        return _fix(args)
     if args.command in ("agents-check", "trust"):
         if not Path(args.repo).is_dir():
             print(f"okf: error: directory not found: {args.repo}", file=sys.stderr)
@@ -61,6 +67,18 @@ def _parser() -> argparse.ArgumentParser:
     trust.add_argument("--json", action="store_true", help="print the map as JSON")
     _add_now(trust)
     _add_format(trust)
+
+    fix = commands.add_parser("fix", help="propose fixes for broken and outdated instructions: a diff, --apply writes it")
+    fix.add_argument("repo", nargs="?", default=".", help="repository or directory (default: .)")
+    fix.add_argument("--apply", action="store_true", help="write the fixes; rewritten sections become not verified")
+    fix.add_argument("--draft", action="store_true",
+                     help="also ask an LLM to redraft sections whose code changed (your own key: " + KEY_HELP + ")")
+    fix.add_argument("--replay", metavar="FILE", help="--draft from a saved model answer instead of a model call")
+    fix.add_argument("--only", action="append", default=[], metavar="UNIT", help="only this unit, e.g. AGENTS.md#Auth")
+    fix.add_argument("--since", "--base", dest="since", metavar="REF",
+                     help="also fix files renamed since REF, and draft for what this change touched")
+    fix.add_argument("--max-diff", type=int, default=40000, help="largest source diff sent to the model, in characters")
+    _add_now(fix)
 
     verify_parser = commands.add_parser("verify", help="confirm that an instruction section or OKF document is true")
     verify_parser.add_argument("units", nargs="*", metavar="FILE[#SECTION]",
@@ -244,6 +262,59 @@ def _trust_summary(trust_map) -> dict:
         "in_change": len(trust_map.in_change()) if trust_map.since else None,
         "history": "shallow" if trust_map.shallow else "full",
     }
+
+
+def _fix(args: argparse.Namespace) -> int:
+    root = Path(args.repo).resolve()
+    git_root = toplevel(root)
+    now = _now(args)
+    changes = base_commit = None
+    if args.since:
+        if git_root is None:
+            print("okf: error: --since needs a git repository", file=sys.stderr)
+            return 2
+        try:
+            base_commit = merge_base(git_root, args.since)
+            changes = changes_since(git_root, args.since)
+        except GitError as exc:
+            print(f"okf: error: {exc}", file=sys.stderr)
+            return 2
+    history = History(git_root, now)
+    trust_map = build_map(root, history, changes, None, now, base_commit)
+    plan = plan_fixes(root, history, trust_map, changes, args.only)
+    if args.draft or args.replay:
+        try:
+            provider = ReplayProvider(Path(args.replay)) if args.replay else provider_from_env()
+        except (OSError, ValueError) as exc:
+            print(f"okf: error: cannot read {args.replay}: {exc}", file=sys.stderr)
+            return 2
+        if provider is None:
+            print(f"okf fix: no LLM key, so no drafts: {KEY_HELP}; showing the mechanical fixes only", file=sys.stderr)
+        else:
+            plan_drafts(plan, trust_map, history, provider, args.only, base_commit, args.max_diff)
+    mechanical, drafted = render(plan)
+    sys.stdout.write(mechanical + drafted)
+    sys.stdout.flush()
+    for edit in plan.edits:
+        print(f"okf fix: {edit.unit}: {edit.reason}", file=sys.stderr)
+    for item in plan.manual:
+        print(f"okf fix: {item.unit} (line {item.line}): {item.reason}", file=sys.stderr)
+    for draft in plan.drafts:
+        if draft.rejected:
+            print(f"okf fix --draft: {draft.unit}: no draft: {draft.rejected}", file=sys.stderr)
+        else:
+            print(f"okf fix --draft: {draft.unit}: {draft.summary} (by {draft.by}; not verified)", file=sys.stderr)
+    drafts = sum(not d.rejected for d in plan.drafts)
+    print(f"okf fix: {len(plan.edits)} mechanical fixes, {drafts} drafts, {len(plan.manual)} need a manual fix",
+          file=sys.stderr)
+    if args.apply and (plan.edits or drafts):
+        try:
+            units = apply(plan, git_root, now if args.now else None)
+        except (OSError, FixError) as exc:
+            print(f"okf: error: {exc}", file=sys.stderr)
+            return 2
+        print(f"okf fix: applied to {', '.join(units)}; they stay not verified until okf verify", file=sys.stderr)
+    return 0
 
 
 def _verify(args: argparse.Namespace) -> int:

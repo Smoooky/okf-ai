@@ -234,6 +234,44 @@ def _blame(output: str) -> list[datetime | None]:
     return [times.get(by_line.get(number, ""), None) for number in range(1, max(by_line, default=0) + 1)]
 
 
+EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # what a diff "since before the first commit" starts from
+
+
+def commit_at(repo_root: Path, moment: datetime) -> str:
+    """The last commit on HEAD at `moment` (the empty tree if the history starts later)."""
+    try:
+        found = _git(["rev-list", "-1", f"--before={moment.astimezone(timezone.utc).isoformat()}", "HEAD"],
+                     cwd=repo_root).strip()
+    except GitError:
+        found = ""
+    return found or EMPTY_TREE
+
+
+def diff_since(repo_root: Path, commit: str, paths: list[str]) -> str:
+    """What changed in `paths` from `commit` to the working tree."""
+    if not paths:
+        return ""
+    try:
+        return _git(["diff", "--no-color", "--no-ext-diff", "-M", commit, "--", *paths], cwd=repo_root)
+    except GitError:
+        return ""
+
+
+def file_at(repo_root: Path, commit: str, path: str) -> str | None:
+    try:
+        return _git(["show", f"{commit}:{path}"], cwd=repo_root)
+    except GitError:
+        return None
+
+
+def commits_changing_count(repo_root: Path, text: str, path: str) -> list[str]:
+    """Commits that added or removed `text` in `path`, newest first (`git log -S`)."""
+    try:
+        return _git(["log", "--format=%H", f"-S{text}", "--", path], cwd=repo_root).split()
+    except GitError:
+        return []
+
+
 def _git(args: list[str], cwd: Path) -> str:
     try:
         result = subprocess.run(
