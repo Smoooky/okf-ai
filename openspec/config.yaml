@@ -1,0 +1,22 @@
+schema: spec-driven
+context: |
+  Language: Russian
+  All artifacts must be written in Russian.
+  Keep OpenSpec structural headings and SHALL/MUST keywords in English.
+
+  Product: okf-ai, a Python CLI `okf` that shows which instructions and knowledge for AI agents
+  can be trusted right now: knowledge bases in Open Knowledge Format v0.2
+  (https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md) and agent
+  instruction files (AGENTS.md, CLAUDE.md, Cursor rules, Copilot instructions).
+  Commands: okf validate, okf agents, okf agents-check, okf stale, okf trust, okf verify, okf fix, okf scan;
+  plus the GitHub Action in .github/workflows/okf.yml.
+  Tech stack: Python 3.10+, Git, pytest; runs on Windows, Linux and macOS.
+  Output: one line per finding on stdout, `[LEVEL] file_path: field_name: message`, levels ERROR / WARNING / INFO
+  (okf trust also prints OK); the summary goes to stderr; `--format github` prints GitHub Actions workflow commands.
+  Exit codes: 0 success or warnings only, 1 errors (or a failed --strict / --check), 2 usage or environment error.
+  Behavior is deterministic for the same repository, history and --now; no network access
+  unless the user configured a connector or an LLM key (okf fix --draft) or runs okf scan.
+  Older team specs etc/spec/*.md are history; openspec/specs/ is the source of truth.
+rules:
+  specs:
+    - Use GIVEN/WHEN/THEN

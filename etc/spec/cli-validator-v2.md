@@ -1,3 +1,4 @@
+> Актуальная спецификация теперь в OpenSpec: [openspec/specs/okf-validation/spec.md](../../openspec/specs/okf-validation/spec.md).
 # Main Spec v2: CLI-валидатор OKF v0.2 и строгий профиль okf-ai
 
 > Заменяет [cli-validator.md](cli-validator.md) для кода в `src/okf/`. Первая версия описывала собственную
