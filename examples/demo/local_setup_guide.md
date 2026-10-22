@@ -1,19 +1,16 @@
 ---
-type: "Guide"
+type: Guide
+title: Локальный запуск Wheelo
+description: База, переменные окружения и SMS-шлюз для разработки.
 tags: [onboarding, dev]
-provenance:
-  sources:
-    - "git://examples/demo/src/config.py"
-trust:
-  generated: "human"
-  verified_by: "teamlead_ivan"
-  confidence: 0.9
-lifecycle:
-  status: "stable"
-freshness:
-  last_reviewed: "2026-10-01"
-  stale_after: "2027-01-01"
-timestamp: "2026-10-01T09:30:00Z"
+status: stable
+generated: { by: human:teamlead_ivan, at: 2026-10-01T09:30:00Z }
+verified: { by: human:teamlead_ivan, at: 2026-10-01T09:30:00Z }
+stale_after: 2027-01-01T00:00:00Z
+sources:
+  - id: config
+    resource: /src/config.py
+    title: Настройки сервиса
 ---
 
 # Локальный запуск Wheelo
@@ -28,5 +25,5 @@ timestamp: "2026-10-01T09:30:00Z"
    | `WHEELO_PAYMENTS_URL` | `https://sandbox.payments.example` |
    | `WHEELO_SMS_URL` | `http://localhost:8025` |
 
-3. SMS-коды при локальном запуске видны в MailHog-подобном шлюзе на порту 8025,
-   см. [поток аутентификации](auth_flow.md).
+3. SMS-коды при локальном запуске видны в тестовом шлюзе на порту 8025,
+   см. [поток аутентификации](/auth_flow.md).

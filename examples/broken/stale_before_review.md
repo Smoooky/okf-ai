@@ -1,20 +1,15 @@
 ---
-type: "Runbook"
+type: Runbook
+title: Протух раньше проверки
 tags: [oncall]
-provenance:
-  sources:
-    - "git://examples/demo/src/billing.py"
-trust:
-  generated: "human"
-  verified_by: "sre_pavel"
-  confidence: 0.9
-lifecycle:
-  status: "stable"
-freshness:
-  last_reviewed: "2026-10-01"
-  stale_after: "2026-01-01"
+status: stable
+generated: { by: human:sre_pavel, at: 2026-10-01T09:00:00Z }
+verified: { by: human:sre_pavel, at: 2026-10-01T09:00:00Z }
+stale_after: 2026-01-01T00:00:00Z
+sources:
+  - resource: /src/billing.py
 ---
 
 # Протух раньше проверки
 
-Ошибка: `stale_after` (2026-01-01) раньше, чем `last_reviewed` (2026-10-01).
+Ошибка `--strict`: `stale_after` (2026-01-01) раньше последней проверки `verified.at` (2026-10-01).

@@ -1,7 +1,7 @@
 ---
-- type: "Guide"
+- type: Guide
 - tags: [onboarding]
-- provenance: "git://examples/demo/src/config.py"
+- sources: /src/config.py
 ---
 
 # Шапка-список

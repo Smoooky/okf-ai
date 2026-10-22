@@ -5,20 +5,16 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass, field
-from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Iterator
 from urllib.parse import unquote
 
 import yaml
 
-# Service files in the bundle root: plain markdown, no front matter.
-SERVICE_FILES = ("index.md", "log.md")
-# Generated router: not validated and not counted as a link source.
-GENERATED_FILES = ("AGENTS.md",)
-IGNORED_DIRS = {"node_modules", "__pycache__", "venv"}
+from okf.schema import GENERATED_FILES, RESERVED_FILES
+from okf.values import MISSING, describe
 
-MISSING = object()
+IGNORED_DIRS = {"node_modules", "__pycache__", "venv"}
 
 
 class _Loader(yaml.SafeLoader):
@@ -46,29 +42,40 @@ class Document:
     body_line: int = 1  # 1-based line where the body starts
 
     @property
-    def is_service(self) -> bool:
-        return self.rel in SERVICE_FILES
+    def name(self) -> str:
+        return self.path.name
+
+    @property
+    def is_reserved(self) -> bool:
+        """index.md or log.md at any level (OKF §3.1)."""
+        return self.name in RESERVED_FILES
 
     @property
     def is_generated(self) -> bool:
         return self.rel in GENERATED_FILES
 
     @property
-    def is_knowledge(self) -> bool:
-        return not (self.is_service or self.is_generated)
+    def is_concept(self) -> bool:
+        return not (self.is_reserved or self.is_generated)
 
     @property
     def title(self) -> str:
         if self.meta and isinstance(self.meta.get("title"), str) and self.meta["title"].strip():
             return self.meta["title"].strip()
-        for line, _ in _markdown_lines(self.body, self.body_line):
-            match = re.match(r"^#\s+(.+?)\s*#*\s*$", line)
-            if match:
-                return match.group(1)
+        for heading, _ in self.headings(level=1):
+            return heading
         return self.path.stem.replace("_", " ").replace("-", " ")
 
+    def headings(self, level: int) -> Iterator[tuple[str, int]]:
+        """ATX headings of one level in the body, with line numbers (code is skipped)."""
+        pattern = re.compile(rf"^#{{{level}}}\s+(.+?)\s*#*\s*$")
+        for line, number in _markdown_lines(self.body, self.body_line):
+            match = pattern.match(line)
+            if match:
+                yield match.group(1), number
+
     def get(self, dotted: str, default: Any = MISSING) -> Any:
-        """Nested front matter value by dotted path, e.g. `trust.confidence`."""
+        """Nested front matter value by dotted path, e.g. `generated.by`."""
         value: Any = self.meta if self.meta is not None else {}
         for part in dotted.split("."):
             if not isinstance(value, dict) or part not in value:
@@ -81,7 +88,7 @@ class Document:
         found = None
         start, indent = 0, -1
         for part in re.sub(r"\[\d+\]", "", dotted).split("."):
-            pattern = re.compile(rf"^(\s*)[\"']?{re.escape(part)}[\"']?\s*:")
+            pattern = re.compile(rf"^(\s*)(?:-\s+)?[\"']?{re.escape(part)}[\"']?\s*:")
             for i in range(start, len(self.front_matter_lines)):
                 match = pattern.match(self.front_matter_lines[i])
                 if match and len(match.group(1)) > indent:
@@ -112,8 +119,8 @@ class Bundle:
         root = Path(root).resolve()
         return cls(root, [load_document(path, root) for path in discover(root)])
 
-    def knowledge(self) -> list[Document]:
-        return [doc for doc in self.documents if doc.is_knowledge]
+    def concepts(self) -> list[Document]:
+        return [doc for doc in self.documents if doc.is_concept]
 
     def resolve_link(self, doc: Document, target: str) -> Path | None:
         """Absolute path a local link points to, or None for external links and anchors."""
@@ -180,42 +187,6 @@ def _parse_front_matter(doc: Document) -> None:
         doc.meta = meta
 
 
-def as_date(value: Any) -> date | None:
-    """`YYYY-MM-DD` (or an ISO datetime) as a date; None if it is not a valid date."""
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    if not isinstance(value, str):
-        return None
-    text = value.strip()
-    try:
-        return date.fromisoformat(text)
-    except ValueError:
-        pass
-    try:
-        return datetime.fromisoformat(text.replace("Z", "+00:00")).date()
-    except ValueError:
-        return None
-
-
-def describe(value: Any) -> str:
-    """YAML-ish name of a value's type, for error messages."""
-    if value is None:
-        return "null"
-    if isinstance(value, bool):
-        return "boolean"
-    if isinstance(value, (int, float)):
-        return "number"
-    if isinstance(value, str):
-        return "string"
-    if isinstance(value, list):
-        return "list"
-    if isinstance(value, dict):
-        return "mapping"
-    return type(value).__name__
-
-
 _FENCE_RE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
 _CODE_SPAN_RE = re.compile(r"(`+).+?\1")
 _INLINE_LINK_RE = re.compile(
@@ -223,7 +194,7 @@ _INLINE_LINK_RE = re.compile(
     r"\(\s*(<[^>\n]*>|[^)\s]+)"  # (target
     r"(?:\s+(?:\"[^\"]*\"|'[^']*'|\([^)]*\)))?\s*\)"  # optional "title")
 )
-_REF_DEF_RE = re.compile(r"^\s{0,3}\[[^\]]+\]:\s*(<[^>\n]*>|\S+)")
+_REF_DEF_RE = re.compile(r"^\s{0,3}\[(?!\^)[^\]]+\]:\s*(<[^>\n]*>|\S+)")  # footnotes [^id]: are not links
 _SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*:")
 
 

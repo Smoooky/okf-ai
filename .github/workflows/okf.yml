@@ -7,6 +7,7 @@ on:
 
 env:
   OKF_BUNDLE: examples/demo  # knowledge bundle to check
+  OKF_VALIDATE_ARGS: --strict  # okf-ai team profile; empty for plain OKF v0.2 conformance
 
 jobs:
   tests:
@@ -42,8 +43,8 @@ jobs:
         id: validate
         run: |
           set +e
-          okf validate "$OKF_BUNDLE" --format github 2> /dev/null  # annotations in the PR
-          okf validate "$OKF_BUNDLE" > validate.txt 2> validate-summary.txt
+          okf validate "$OKF_BUNDLE" $OKF_VALIDATE_ARGS --format github 2> /dev/null  # annotations in the PR
+          okf validate "$OKF_BUNDLE" $OKF_VALIDATE_ARGS > validate.txt 2> validate-summary.txt
           echo "exit=$?" >> "$GITHUB_OUTPUT"
           cat validate.txt validate-summary.txt
 

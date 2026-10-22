@@ -1,19 +1,16 @@
 ---
-type: "Service"
+type: Service
+title: Сервис биллинга
+description: Холд при старте поездки, поминутное списание и повторы неудачных платежей.
 tags: [billing, payments]
-provenance:
-  sources:
-    - "git://examples/demo/src/billing.py"
-trust:
-  generated: "human"
-  verified_by: "maria_backend"
-  confidence: 0.9
-lifecycle:
-  status: "stable"
-freshness:
-  last_reviewed: "2026-10-05"
-  stale_after: "2027-04-05"
-timestamp: "2026-10-05T12:30:00Z"
+status: stable
+generated: { by: human:maria_backend, at: 2026-10-05T12:30:00Z }
+verified: { by: human:maria_backend, at: 2026-10-05T12:30:00Z }
+stale_after: 2027-04-05T00:00:00Z
+sources:
+  - id: billing-code
+    resource: /src/billing.py
+    title: Модуль биллинга
 ---
 
 # Сервис биллинга
@@ -27,9 +24,9 @@ timestamp: "2026-10-05T12:30:00Z"
 
 ## Как проходит оплата
 
-1. При [старте поездки](api_start_ride.md) на карте холдируется 300 ₽.
+1. При [старте поездки](/api_start_ride.md) на карте холдируется 300 ₽.
 2. По окончании поездки списывается `50 + 8 × минуты` ₽.
 3. Если списание не прошло, сервис повторяет его до 3 раз, затем снимает холд
-   и помечает платёж `failed`. Что делать дальше — в [ранбуке](payment_failures_runbook.md).
+   и помечает платёж `failed`. Что делать дальше — в [ранбуке](/payment_failures_runbook.md).
 
-Поездки и суммы хранятся в таблице [rides](rides_table.md).
+Поездки и суммы хранятся в таблице [rides](/rides_table.md).

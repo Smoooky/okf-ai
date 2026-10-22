@@ -1,20 +1,16 @@
 ---
-type: "Endpoint"
+type: Endpoint
+title: Тип не из словаря
 tags: [api]
-provenance:
-  sources:
-    - "git://examples/demo/src/rides.py"
-trust:
-  generated: "script"
-  verified_by: "maria_backend"
-  confidence: 0.8
-lifecycle:
-  status: "stable"
-freshness:
-  last_reviewed: "2026-10-01"
-  stale_after: "2027-01-01"
+status: stable
+generated: { by: process:openapi-export, at: 2026-10-01T09:00:00Z }
+verified: { by: human:maria_backend, at: 2026-10-01T12:00:00Z }
+stale_after: 2027-01-01T00:00:00Z
+sources:
+  - resource: /src/rides.py
 ---
 
-# Неверный type
+# Тип не из словаря
 
-Ошибка: `Endpoint` нет в словаре типов, правильно — `API Endpoint`.
+Предупреждение `--strict`: `Endpoint` нет в словаре типов okf-ai, правильно — `API Endpoint`.
+OKF v0.2 требует терпеть незнакомые типы, поэтому это не ошибка.

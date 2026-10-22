@@ -1,25 +1,22 @@
 ---
-type: "Metric"
-tags: "product"
-provenance:
-  sources:
-    - "jira://WHL-42"
-trust:
-  generated: "human"
-  confidence: "high"
-lifecycle:
-  status: "draft"
-  freshness:
-    last_reviewed: "19.10.2026"
-    stale_after: "2027-10-19"
+type: Metric
+title: Много ошибок сразу
+tags: product, rides
+status: published
+generated: { at: 2026-10-01T09:00:00Z }
+verified:
+  - { by: teamlead_ivan }
+stale_after: "2027-10-19"
+sources:
+  - "git://src/rides.py"
+  - { title: Дашборд без ссылки }
 ---
 
 # Много ошибок сразу
 
-Ошибки:
-
-- `tags` — строка, а не список строк;
-- `trust.confidence` — не число;
-- нет `trust.verified_by`;
-- `freshness` спрятан внутрь `lifecycle`, а должен быть на верхнем уровне
-  (и дата `19.10.2026` не в формате `YYYY-MM-DD`).
+- `tags` — строка через запятую, а не YAML-список (в OKF — предупреждение, в `--strict` — ошибка);
+- `status` — не из `draft | stable | deprecated`;
+- в `generated` нет `by`;
+- в `verified` актор без префикса (`human:<id>`, `process:<id>` или `<agent>/<version>`) и нет `at`;
+- `stale_after` — дата без времени и UTC-смещения;
+- первый источник — строка, а не `{resource: ...}`, у второго нет `resource`.

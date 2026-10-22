@@ -1,86 +1,100 @@
-"""Find documents that may be outdated: their `git://` sources changed, or `stale_after` has passed."""
+"""`okf stale`: documents whose `sources` changed, or past `stale_after`."""
 
 from __future__ import annotations
 
 import fnmatch
 import os
+import re
 import subprocess
-from datetime import date
+from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import unquote
 
-from okf.bundle import Bundle, Document, as_date
+from okf import schema
+from okf.bundle import Bundle, Document
 from okf.report import INFO, WARNING, Issue
 
-GIT_SCHEME = "git://"
+# https://github.com/<owner>/<repo>/blob/<ref>/<path>: the file is <path> in this repository.
+_GITHUB_FILE_RE = re.compile(r"^https?://github\.com/[^/]+/[^/]+/(?:blob|tree)/[^/]+/(?P<path>[^?#]+)")
+_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*:")
 
 
 class GitError(RuntimeError):
     pass
 
 
-def find_stale(bundle: Bundle, changed: list[str], repo_root: Path, today: date) -> list[Issue]:
+def find_stale(bundle: Bundle, changed: list[str], repo_root: Path, now: datetime) -> list[Issue]:
+    repo_root = Path(repo_root).resolve()
     changed_paths = {normalize_repo_path(path) for path in changed if path.strip()}
     issues: list[Issue] = []
-    for doc in bundle.knowledge():
+    for doc in bundle.concepts():
         if doc.meta is None:
             continue  # broken front matter is reported by `okf validate`
-        issues.extend(_changed_sources(doc, changed_paths, repo_root))
-        stale_after = as_date(doc.get("freshness.stale_after", None))
-        if stale_after is not None and stale_after < today:
+        issues.extend(_changed_sources(doc, bundle, changed_paths, repo_root))
+        expires = schema.stale_after(doc)
+        if expires is not None and now >= expires:
             issues.append(
                 Issue(
                     WARNING,
                     doc.path,
-                    "freshness.stale_after",
-                    f"Review date {stale_after} has passed (today is {today}); document is stale{_reviewer(doc)}",
-                    doc.field_line("freshness.stale_after"),
+                    "stale_after",
+                    f"{doc.get('stale_after')} has passed (now {_utc(now)}); document is stale{_ask(doc)}",
+                    doc.field_line("stale_after"),
                 )
             )
     return issues
 
 
-def _changed_sources(doc: Document, changed_paths: set[str], repo_root: Path) -> list[Issue]:
-    sources = doc.get("provenance.sources", None)
-    if not isinstance(sources, list) or not changed_paths:
+def _changed_sources(doc: Document, bundle: Bundle, changed_paths: set[str], repo_root: Path) -> list[Issue]:
+    if not changed_paths:
         return []
-    doc_updated = repo_relative(doc.path, repo_root) in changed_paths
+    updated = _relative(doc.path, repo_root) in changed_paths
     issues = []
-    for source in sources:
-        pattern = source_path(source)
-        if pattern is None:
-            continue
-        matched = sorted(path for path in changed_paths if source_matches(pattern, path))
+    for resource in schema.sources(doc):
+        patterns = resource_paths(resource, doc, bundle.root, repo_root)
+        matched = sorted(path for path in changed_paths if any(source_matches(p, path) for p in patterns))
         if not matched:
             continue
-        what = f"Source {source} changed"
-        if matched != [pattern]:
+        what = f"Source {resource} changed"
+        if matched != [resource]:
             what += f" ({', '.join(matched)})"
-        if doc_updated:
-            issues.append(Issue(INFO, doc.path, "provenance.sources", f"{what}; document was updated in the same change"))
+        if updated:
+            issues.append(Issue(INFO, doc.path, "sources", f"{what}; document was updated in the same change"))
         else:
             issues.append(
-                Issue(
-                    WARNING,
-                    doc.path,
-                    "provenance.sources",
-                    f"{what}; document may be outdated{_reviewer(doc)}",
-                    doc.field_line("provenance.sources"),
-                )
+                Issue(WARNING, doc.path, "sources", f"{what}; document may be outdated{_ask(doc)}", doc.field_line("sources"))
             )
     return issues
 
 
-def _reviewer(doc: Document) -> str:
-    verified_by = doc.get("trust.verified_by", None)
-    return f", ask {verified_by} to review it" if isinstance(verified_by, str) and verified_by.strip() else ""
+def resource_paths(resource: str, doc: Document, bundle_root: Path, repo_root: Path) -> list[str]:
+    """Repository paths a `sources[].resource` may point to.
 
-
-def source_path(source: object) -> str | None:
-    """Repository path of a `git://` source; None for other kinds of sources (URLs, jira://, ...)."""
-    if not isinstance(source, str) or not source.startswith(GIT_SCHEME):
-        return None
-    path = source[len(GIT_SCHEME) :].split("#", 1)[0].split("?", 1)[0]
-    return normalize_repo_path(path) or None
+    `/path` is relative to the bundle root, `./path` and `../path` to the concept file,
+    a bare `path` to either (the official examples write bundle-root paths that way),
+    and a GitHub blob URL names `<path>` in this repository. Other URLs and scope
+    descriptors point nowhere.
+    """
+    match = _GITHUB_FILE_RE.match(resource)
+    if match:
+        return [normalize_repo_path(unquote(match.group("path")))]
+    if _SCHEME_RE.match(resource):
+        return []
+    path = unquote(resource.split("#", 1)[0].split("?", 1)[0]).strip()
+    if not path:
+        return []
+    if path.startswith("/"):
+        candidates = [bundle_root / path.lstrip("/")]
+    elif path.startswith(("./", "../")):
+        candidates = [doc.path.parent / path]
+    else:
+        candidates = [doc.path.parent / path, bundle_root / path]
+    result = []
+    for candidate in candidates:
+        relative = _relative(Path(os.path.normpath(candidate)), repo_root)
+        if relative and not relative.startswith("..") and relative not in result:
+            result.append(relative)
+    return result
 
 
 def source_matches(pattern: str, changed_path: str) -> bool:
@@ -98,11 +112,20 @@ def normalize_repo_path(path: str) -> str:
     return path.lstrip("/")
 
 
-def repo_relative(path: Path, repo_root: Path) -> str:
+def _relative(path: Path, repo_root: Path) -> str:
     try:
-        return Path(path).resolve().relative_to(Path(repo_root).resolve()).as_posix()
-    except ValueError:
         return Path(os.path.relpath(path, repo_root)).as_posix()
+    except ValueError:  # another drive on Windows
+        return ""
+
+
+def _ask(doc: Document) -> str:
+    who = schema.reviewer(doc)
+    return f", ask {who} to review it" if who else ""
+
+
+def _utc(moment: datetime) -> str:
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def git_toplevel(path: Path) -> Path | None:
