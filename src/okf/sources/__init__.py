@@ -20,8 +20,9 @@ from okf.sources.git import GitSource
 from okf.sources.http import Http
 from okf.sources.jira import JiraSource
 from okf.sources.notion import NotionSource
+from okf.sources.slack import SlackSource
 
-CONNECTORS: list[type[Source]] = [ConfluenceSource, JiraSource, NotionSource]
+CONNECTORS: list[type[Source]] = [ConfluenceSource, JiraSource, NotionSource, SlackSource]
 
 __all__ = ["CONNECTORS", "Check", "GitSource", "Registry", "Signal", "Source", "Unavailable", "registry"]
 

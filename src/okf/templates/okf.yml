@@ -30,10 +30,15 @@ jobs:
       pull-requests: write  # sticky PR comment with the report
     env:
       BASE_REF: ${{ github.base_ref }}
-      # Optional connectors for Confluence pages and Jira issues in `sources`: without them nothing
-      # changes and nothing is requested; with them, a closed epic or an edited page asks for a recheck.
+      # Optional connectors for sources outside git (Confluence, Jira, Notion, pinned Slack messages):
+      # without them nothing changes and nothing is requested.
       OKF_CONFLUENCE_URL: ${{ vars.OKF_CONFLUENCE_URL }}
       OKF_JIRA_URL: ${{ vars.OKF_JIRA_URL }}
+      OKF_ATLASSIAN_EMAIL: ${{ vars.OKF_ATLASSIAN_EMAIL }}
+      OKF_ATLASSIAN_TOKEN: ${{ secrets.OKF_ATLASSIAN_TOKEN }}
+      OKF_ATLASSIAN_PAT: ${{ secrets.OKF_ATLASSIAN_PAT }}
+      OKF_NOTION_TOKEN: ${{ secrets.OKF_NOTION_TOKEN }}
+      OKF_SLACK_TOKEN: ${{ secrets.OKF_SLACK_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -50,10 +55,6 @@ jobs:
           fi
 
       - name: okf trust
-        env:
-          OKF_ATLASSIAN_EMAIL: ${{ vars.OKF_ATLASSIAN_EMAIL }}
-          OKF_ATLASSIAN_TOKEN: ${{ secrets.OKF_ATLASSIAN_TOKEN }}
-          OKF_ATLASSIAN_PAT: ${{ secrets.OKF_ATLASSIAN_PAT }}
         run: |  # in a PR: the sections this change makes to recheck; on push: the whole map
           okf trust "$OKF_REPO" $OKF_SINCE_ARGS --format github 2> /dev/null
           okf trust "$OKF_REPO" $OKF_SINCE_ARGS --html report.html > trust.txt 2> trust-summary.txt
@@ -73,9 +74,6 @@ jobs:
           OKF_LLM_API_KEY: ${{ secrets.OKF_LLM_API_KEY }}
           OKF_LLM_BASE_URL: ${{ vars.OKF_LLM_BASE_URL }}
           OKF_LLM_MODEL: ${{ vars.OKF_LLM_MODEL }}
-          OKF_ATLASSIAN_EMAIL: ${{ vars.OKF_ATLASSIAN_EMAIL }}
-          OKF_ATLASSIAN_TOKEN: ${{ secrets.OKF_ATLASSIAN_TOKEN }}
-          OKF_ATLASSIAN_PAT: ${{ secrets.OKF_ATLASSIAN_PAT }}
         run: |  # proposals only: this workflow never commits or opens a pull request
           draft=""  # the same keys okf fix --draft needs: Anthropic, or all three OKF_LLM_* settings
           if [ -n "$ANTHROPIC_API_KEY" ]; then draft="--draft"; fi
@@ -105,10 +103,6 @@ jobs:
           cat validate.txt validate-summary.txt
 
       - name: okf stale
-        env:
-          OKF_ATLASSIAN_EMAIL: ${{ vars.OKF_ATLASSIAN_EMAIL }}
-          OKF_ATLASSIAN_TOKEN: ${{ secrets.OKF_ATLASSIAN_TOKEN }}
-          OKF_ATLASSIAN_PAT: ${{ secrets.OKF_ATLASSIAN_PAT }}
         run: |
           okf stale "$OKF_BUNDLE" $OKF_BASE_ARGS --format github 2> /dev/null
           okf stale "$OKF_BUNDLE" $OKF_BASE_ARGS > stale.txt 2> stale-summary.txt
@@ -187,6 +181,16 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+    env:
+      # Optional connectors for sources outside git (Confluence, Jira, Notion, pinned Slack messages):
+      # without them nothing changes and nothing is requested.
+      OKF_CONFLUENCE_URL: ${{ vars.OKF_CONFLUENCE_URL }}
+      OKF_JIRA_URL: ${{ vars.OKF_JIRA_URL }}
+      OKF_ATLASSIAN_EMAIL: ${{ vars.OKF_ATLASSIAN_EMAIL }}
+      OKF_ATLASSIAN_TOKEN: ${{ secrets.OKF_ATLASSIAN_TOKEN }}
+      OKF_ATLASSIAN_PAT: ${{ secrets.OKF_ATLASSIAN_PAT }}
+      OKF_NOTION_TOKEN: ${{ secrets.OKF_NOTION_TOKEN }}
+      OKF_SLACK_TOKEN: ${{ secrets.OKF_SLACK_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -203,11 +207,6 @@ jobs:
           OKF_LLM_API_KEY: ${{ secrets.OKF_LLM_API_KEY }}
           OKF_LLM_BASE_URL: ${{ vars.OKF_LLM_BASE_URL }}
           OKF_LLM_MODEL: ${{ vars.OKF_LLM_MODEL }}
-          OKF_CONFLUENCE_URL: ${{ vars.OKF_CONFLUENCE_URL }}
-          OKF_JIRA_URL: ${{ vars.OKF_JIRA_URL }}
-          OKF_ATLASSIAN_EMAIL: ${{ vars.OKF_ATLASSIAN_EMAIL }}
-          OKF_ATLASSIAN_TOKEN: ${{ secrets.OKF_ATLASSIAN_TOKEN }}
-          OKF_ATLASSIAN_PAT: ${{ secrets.OKF_ATLASSIAN_PAT }}
         run: |
           draft=""
           if [ -n "$ANTHROPIC_API_KEY" ]; then draft="--draft"; fi
@@ -224,6 +223,15 @@ jobs:
     env:
       OKF_SLACK_WEBHOOK: ${{ secrets.OKF_SLACK_WEBHOOK }}
       OKF_TEAMS_WEBHOOK: ${{ secrets.OKF_TEAMS_WEBHOOK }}
+      # Optional connectors for sources outside git (Confluence, Jira, Notion, pinned Slack messages):
+      # without them nothing changes and nothing is requested.
+      OKF_CONFLUENCE_URL: ${{ vars.OKF_CONFLUENCE_URL }}
+      OKF_JIRA_URL: ${{ vars.OKF_JIRA_URL }}
+      OKF_ATLASSIAN_EMAIL: ${{ vars.OKF_ATLASSIAN_EMAIL }}
+      OKF_ATLASSIAN_TOKEN: ${{ secrets.OKF_ATLASSIAN_TOKEN }}
+      OKF_ATLASSIAN_PAT: ${{ secrets.OKF_ATLASSIAN_PAT }}
+      OKF_NOTION_TOKEN: ${{ secrets.OKF_NOTION_TOKEN }}
+      OKF_SLACK_TOKEN: ${{ secrets.OKF_SLACK_TOKEN }}
     steps:
       - uses: actions/checkout@v4
         if: env.OKF_SLACK_WEBHOOK != '' || env.OKF_TEAMS_WEBHOOK != ''
@@ -235,12 +243,6 @@ jobs:
           python-version: "3.12"
       - name: okf notify
         if: env.OKF_SLACK_WEBHOOK != '' || env.OKF_TEAMS_WEBHOOK != ''
-        env:
-          OKF_CONFLUENCE_URL: ${{ vars.OKF_CONFLUENCE_URL }}
-          OKF_JIRA_URL: ${{ vars.OKF_JIRA_URL }}
-          OKF_ATLASSIAN_EMAIL: ${{ vars.OKF_ATLASSIAN_EMAIL }}
-          OKF_ATLASSIAN_TOKEN: ${{ secrets.OKF_ATLASSIAN_TOKEN }}
-          OKF_ATLASSIAN_PAT: ${{ secrets.OKF_ATLASSIAN_PAT }}
         run: |
           pip install "okf-ai[llm] @ git+https://github.com/Smoooky/okf-ai"
           okf notify "$OKF_REPO"

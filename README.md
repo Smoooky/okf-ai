@@ -12,7 +12,8 @@
   `okf trust --html report.html` — та же карта страницей для людей, `okf view` — сайт базы знаний с графом связей;
 - `okf fix` — правки: механические без ИИ (переехавший файл, переименованный скрипт) и черновики от LLM для разделов,
   чей код поменялся (`--draft`, свой ключ); правленое остаётся «не подтверждено», пока человек не сделает `okf verify`;
-- коннекторы Confluence, Jira и Notion: закрытый эпик или новая версия страницы просит перепроверить документ;
+- коннекторы Confluence, Jira, Notion и Slack: закрытый эпик, новая версия страницы или изменённое закреплённое
+  сообщение просит перепроверить документ;
   `okf import confluence` и `okf import notion` переносят страницы в git как документы OKF; свой коннектор — один файл;
 - `okf agents-check` и `okf stale` — страж в PR: битые пути и команды в инструкциях, документы, чей код поменялся;
 - `okf notify` — напоминание в Slack или Teams тем, кто подтверждал то, что теперь «перепроверить»;
@@ -260,9 +261,10 @@ After reading, confirm in one command: `okf verify "AGENTS.md#Auth" "knowledge/a
 - В Action — задание `notify` по расписанию (будни, 07:00 UTC), только если задан секрет `OKF_SLACK_WEBHOOK` или
   `OKF_TEAMS_WEBHOOK`. Проверено на локальном мок-вебхуке; в настоящие Slack и Teams ничего не отправлялось.
 
-## Источники вне git: Confluence, Jira, Notion
+## Источники вне git: Confluence, Jira, Notion, Slack
 
-В `sources[].resource` документа OKF может стоять не только файл, но и страница Confluence или Notion, задача Jira.
+В `sources[].resource` документа OKF может стоять не только файл, но и страница Confluence или Notion, задача Jira,
+закреплённое сообщение Slack.
 `okf trust`, `okf stale` и `okf fix --draft` спрашивают о них коннекторы:
 
 | Коннектор | Ресурсы | Что считается изменением |
@@ -271,6 +273,7 @@ After reading, confirm in one command: `okf verify "AGENTS.md#Auth" "knowledge/a
 | Confluence | `https://<site>.atlassian.net/wiki/spaces/<KEY>/pages/<id>/...`, `https://<host>/pages/viewpage.action?pageId=<id>`, `confluence://<id>` | новая версия страницы; дифф — текст версии на дату подтверждения против текущей |
 | Jira | `https://<site>.atlassian.net/browse/<KEY-123>`, `jira://<KEY-123>` | задача перешла в Done (из changelog): «закрытый эпик — триггер на актуализацию» |
 | Notion | `https://www.notion.so/<slug>-<id>`, `https://<workspace>.notion.site/<slug>-<id>`, `notion://<id>` | `last_edited_time` страницы; дифф — текст блоков (страница и дочерние, со всеми страницами пагинации) против снимка `.okf/snapshots/notion/<id>.md`, если он есть, иначе «изменилась после проверки» |
+| Slack | `slack://<channel>/<ts>`, permalink `https://<workspace>.slack.com/archives/<channel>/p<ts>` | закреплённое сообщение отредактировали (`edited.ts`) после проверки документа, его открепили или удалили (Slack не сообщает, когда открепили, поэтому «перепроверить» держится, пока документ на него ссылается) |
 
 ```text
 [WARNING] knowledge/ride_conversion_metric.md: trust: epic WHL-42 closed 2026-10-14, last verified 2026-09-01 by human:pm_anna
@@ -286,6 +289,7 @@ After reading, confirm in one command: `okf verify "AGENTS.md#Auth" "knowledge/a
 - Cloud (`*.atlassian.net`) читается через REST v2 Confluence и v3 Jira, Server/DC — через v1 и v2;
 - `OKF_NOTION_TOKEN` — секрет внутренней интеграции Notion (страницы нужно расшарить с интеграцией); не чаще ~3 запросов
   в секунду: запросы разнесены по времени, на 429 — ожидание `Retry-After`;
+- `OKF_SLACK_TOKEN` — бот-токен Slack с правами `channels:history`, `groups:history`, `pins:read`; бот должен быть в канале;
 - `OKF_SOURCES_TIMEOUT` — таймаут запроса в секундах (10).
 
 **Без настроек сеть не трогается вообще.** Ресурс получает статус «unknown: connector not configured: set
@@ -332,7 +336,7 @@ sources:
 Тело — Markdown из блоков: заголовки, абзацы, списки (вложенные), чек-листы, код, цитаты и callout, таблицы,
 ссылки; дочерняя страница — строкой `Page: <название>`. Текст каждой страницы сохраняется снимком в
 `.okf/snapshots/notion/<id>.md`: с ним `okf fix --draft` показывает модели, что именно поменялось на странице.
-Проверено на фикстурах и мок-сервере; реального аккаунта Notion не было.
+Проверено на фикстурах и мок-сервере; реальных аккаунтов Notion и Slack не было (коннектор Slack — тоже только на моках).
 
 ### Как добавить коннектор
 
@@ -530,8 +534,9 @@ okf scan --score report/label.csv       # точность связей посл
 8. по расписанию, если задан секрет `OKF_SLACK_WEBHOOK` или `OKF_TEAMS_WEBHOOK`, — `okf notify`: напоминания тем,
    кто подтверждал разделы, которые теперь «перепроверить».
 
-Коннекторы Confluence и Jira — по желанию: переменные `OKF_CONFLUENCE_URL`, `OKF_JIRA_URL`, `OKF_ATLASSIAN_EMAIL`
-и секреты `OKF_ATLASSIAN_TOKEN` или `OKF_ATLASSIAN_PAT`. Без них шаги работают как раньше и в сеть не ходят.
+Коннекторы — по желанию: переменные `OKF_CONFLUENCE_URL`, `OKF_JIRA_URL`, `OKF_ATLASSIAN_EMAIL` и секреты
+`OKF_ATLASSIAN_TOKEN` или `OKF_ATLASSIAN_PAT`, `OKF_NOTION_TOKEN`, `OKF_SLACK_TOKEN`. Без них шаги работают как раньше
+и в сеть не ходят.
 
 Ошибки валят проверку, предупреждения — нет. Чтобы подключить к своему репозиторию, скопируйте файл
 и поменяйте `OKF_REPO` (обычно `.`) и `OKF_BUNDLE`; `OKF_AGENTS_ARGS: --strict` сделает битые ссылки в инструкциях ошибками.
@@ -742,7 +747,7 @@ okf validate examples/demo/knowledge --strict && okf agents examples/demo/knowle
 src/okf/        trust.py (карта доверия, verify), fix.py (правки и черновики), pr.py (okf fix --pr), notify.py (okf notify), scan.py (проба), instructions.py (agents-check), schema.py (поля и правила OKF,
                 профили okf и strict), importer.py (okf import), view.py (report.html, okf view), scaffold.py (okf init), validate.py, stale.py,
                 agents.py, bundle.py, git.py, cli.py
-src/okf/sources/ коннекторы: base.py (интерфейс Source), git.py, confluence.py, jira.py, notion.py, http.py (запросы, фикстуры)
+src/okf/sources/ коннекторы: base.py (интерфейс Source), git.py, confluence.py, jira.py, notion.py, slack.py, http.py (запросы, фикстуры)
 tests/          pytest; fixtures/okf-official — официальный пример acme_retail (Apache-2.0)
 examples/       demo (мини-репозиторий + knowledge/), make_demo_history.py, demo-pr, broken, atlassian-fixtures, screenshots
 etc/            бриф, спеки (v1 и v2), конкурентный анализ, интервью-кит
