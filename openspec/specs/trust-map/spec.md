@@ -459,6 +459,11 @@
 - WHEN запускается `okf verify knowledge/auth_flow.md --by human:maria --at 2026-10-22T10:00:00Z`
 - THEN `verified` — список из двух записей, тело и другие поля шапки не изменились
 
+#### Scenario: Шапка закрыта строкой `...`
+- GIVEN документ OKF, шапка которого закрыта `...`
+- WHEN запускается `okf verify` для него
+- THEN `verified` дописывается в шапку перед `...`, тело не меняется, файл остаётся валидным
+
 #### Scenario: Раздел у документа OKF
 - GIVEN `knowledge/auth_flow.md` — документ OKF
 - WHEN запускается `okf verify knowledge/auth_flow.md#Intro`

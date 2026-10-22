@@ -157,16 +157,26 @@ def load_document(path: Path, root: Path) -> Document:
     return doc
 
 
+def opens_front_matter(line: str) -> bool:
+    return line.lstrip("\ufeff").rstrip() == "---"
+
+
+def front_matter_end(lines: list[str]) -> int:
+    """1-based number of the line that closes the YAML front matter (`---` or `...`), 0 if the text
+    has no front matter or it is not closed. The one rule for reading and for writing front matter."""
+    if not lines or not opens_front_matter(lines[0]):
+        return 0
+    return next((i + 1 for i in range(1, len(lines)) if lines[i].rstrip() in ("---", "...")), 0)
+
+
 def _parse_front_matter(doc: Document) -> None:
     lines = doc.text.split("\n")
-    if lines[0].rstrip() != "---":
+    if not opens_front_matter(lines[0]):
         doc.body = doc.text
         return
     doc.has_front_matter = True
-    for end in range(1, len(lines)):
-        if lines[end].rstrip() in ("---", "..."):
-            break
-    else:
+    end = front_matter_end(lines) - 1  # index of the closing line
+    if end < 0:
         doc.meta_error = "Front matter is not closed with '---'"
         doc.meta_error_line = 1
         return

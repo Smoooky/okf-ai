@@ -22,7 +22,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote
 
-from okf.bundle import CODE_SPAN_RE, LINK_RE, SCHEME_RE
+from okf.bundle import CODE_SPAN_RE, LINK_RE, SCHEME_RE, front_matter_end
 from okf.git import Change, History, toplevel
 from okf.report import ERROR, INFO, WARNING, Issue
 
@@ -353,16 +353,6 @@ def _strip_prompt(line: str) -> str:
             text = text[len(prompt) :]
             break
     return "" if text.startswith("#") else text
-
-
-def front_matter_end(lines: list[str]) -> int:
-    """1-based line number of the closing `---`, 0 without front matter."""
-    if not lines or lines[0].strip() != "---":
-        return 0
-    for i in range(1, len(lines)):
-        if lines[i].strip() == "---":
-            return i + 1
-    return 0
 
 
 # --- Understanding commands -----------------------------------------------------

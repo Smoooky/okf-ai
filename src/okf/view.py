@@ -16,7 +16,7 @@ from importlib import resources
 from pathlib import Path
 
 from okf import __version__, schema
-from okf.bundle import Bundle, Document
+from okf.bundle import Bundle, Document, load_document
 from okf.git import head_info
 from okf.markdown import esc, markdown_html
 from okf.trust import TrustMap, Unit
@@ -400,11 +400,11 @@ def find_bundles(path: Path) -> list[Path]:
 
 
 def _is_root_index(path: Path) -> bool:
-    try:
-        text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+    """An index.md whose front matter has okf_version: the root of a bundle."""
+    if not path.is_file():
         return False
-    return text.startswith("---") and "okf_version" in text.split("---", 2)[1] if text.count("---") >= 2 else False
+    meta = load_document(path, path.parent).meta
+    return isinstance(meta, dict) and "okf_version" in meta
 
 
 class _Site:

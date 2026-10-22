@@ -25,11 +25,11 @@ from pathlib import Path
 import yaml
 
 from okf import schema
-from okf.bundle import Bundle, Document, load_document, load_yaml
+from okf.bundle import Bundle, Document, front_matter_end, load_document, load_yaml, opens_front_matter
 from okf.git import Change, History, changed_lines, changed_paths
 from okf.instructions import (
-    DOCUMENT_SUFFIXES, FENCE_INFO_RE, SKIP_DIRS, InstructionFile, Repository, discover, front_matter_end,
-    instruction_scope, references,
+    DOCUMENT_SUFFIXES, FENCE_INFO_RE, SKIP_DIRS, InstructionFile, Repository, discover, instruction_scope,
+    references,
 )
 from okf.sources import Check, Registry, registry
 from okf.sources.git import is_glob, source_matches
@@ -661,7 +661,7 @@ def set_generated(lines: list[str], by: str, stamp: str) -> list[str]:
 def replace_front_matter_key(lines: list[str], key: str, block: list[str]) -> list[str]:
     """Replace a top-level front matter key and its indented lines with `block`, or add it at the end."""
     lines = list(lines)
-    end = front_matter_end(lines)  # 1-based line of the closing ---
+    end = front_matter_end(lines)  # 1-based line of the closing --- or ...
     start = next((i for i in range(1, end - 1) if re.match(rf"^{re.escape(key)}\s*:", lines[i])), None)
     if start is None:
         lines[end - 1 : end - 1] = block
@@ -707,7 +707,7 @@ def _concepts(root: Path, bundles: list[Path] | None) -> list[tuple[Path, Path]]
                 continue
             try:
                 with path.open(encoding="utf-8") as handle:
-                    if handle.readline().strip() != "---":
+                    if not opens_front_matter(handle.readline()):
                         continue
             except (OSError, UnicodeDecodeError):
                 continue

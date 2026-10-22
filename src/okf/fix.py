@@ -28,9 +28,9 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 from okf import schema
-from okf.bundle import load_document
+from okf.bundle import front_matter_end, load_document
 from okf.git import Change, History, commits_changing_count, file_at
-from okf.instructions import InstructionFile, Repository, discover, front_matter_end, references
+from okf.instructions import InstructionFile, Repository, discover, references
 from okf.sources import Registry, registry
 from okf.sources.git import resource_paths
 from okf.trust import (

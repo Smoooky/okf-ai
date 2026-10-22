@@ -422,3 +422,41 @@ def test_demo_history_tells_the_story(tmp_path):
         ".cursor/rules/backend.mdc", "AGENTS.md#Billing", "knowledge/billing_service.md",
         "knowledge/payment_failures_runbook.md",
     ]
+
+
+# --- Front matter closed with "..." (YAML allows it; one rule finds the end everywhere) ---
+
+
+DOTS = ("---\ntype: Guide\ntitle: Auth\nsources:\n  - resource: ../src/auth.py\n...\n\n# Auth\n\n"
+        "Login lives in `src/auth.py`.\n")
+
+
+def test_verify_writes_inside_a_front_matter_closed_with_dots(repo):
+    code_repo(repo).write({"kb/auth.md": DOTS}).commit("2026-09-01T10:00:00Z")
+    assert repo.verify("kb/auth.md") == ["kb/auth.md"]  # was a TrustError: verified went into the body
+    text = (repo.root / "kb" / "auth.md").read_text(encoding="utf-8")
+    assert text.startswith("---\ntype: Guide\n") and "verified:\n  - { by: human:ivan, at: 2026-09-05T10:00:00Z }\n...\n" in text
+    assert text.endswith("# Auth\n\nLogin lives in `src/auth.py`.\n")
+    assert verifications(load_document(repo.root / "kb" / "auth.md", repo.root)) == [
+        {"by": "human:ivan", "at": "2026-09-05T10:00:00Z"}]
+
+
+def test_fix_rewrites_a_moved_source_inside_dots_front_matter(repo, capsys):
+    code_repo(repo).write({"kb/auth.md": DOTS}).commit("2026-09-01T10:00:00Z")
+    repo.git("mv", "src/auth.py", "src/login.py")
+    repo.commit("2026-09-10T10:00:00Z", "rename")
+    assert main(["fix", str(repo.root), "--apply", "--now", "2026-10-22T12:00:00Z"]) == 0
+    text = (repo.root / "kb" / "auth.md").read_text(encoding="utf-8")
+    assert "  - resource: ../src/login.py\n" in text
+    front, _, body = text.partition("\n...\n")
+    assert "generated: { by: process:okf-fix, at: 2026-10-22T12:00:00Z }" in front and "generated" not in body
+    assert load_document(repo.root / "kb" / "auth.md", repo.root).meta["generated"]["by"] == "process:okf-fix"
+    capsys.readouterr()
+
+
+def test_sections_and_bundle_agree_on_the_end_of_front_matter():
+    from okf.bundle import front_matter_end
+
+    lines = DOTS.split("\n")
+    assert front_matter_end(lines) == 6 and front_matter_end(["---", "a: 1"]) == 0 and front_matter_end(["# x"]) == 0
+    assert sections(DOTS) == [(None, 1, 10)]  # no "##" heading: one unit, the front matter is not text
