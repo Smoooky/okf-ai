@@ -7,7 +7,7 @@ there once, so the two commands always agree.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 from okf import schema
@@ -18,6 +18,7 @@ from okf.sources import Registry, registry
 from okf.sources.base import day
 from okf.sources.git import normalize_repo_path, resource_paths, source_matches
 from okf.trust import Unit, build_map, reference_moment
+from okf.values import utc_stamp
 
 __all__ = ["find_stale", "normalize_repo_path", "resource_paths", "source_matches"]
 _SINCE = {"verified": "it was last verified", "written": "it was last written", "edited": "it was last edited"}
@@ -87,5 +88,4 @@ def _ask(doc: Document) -> str:
     return f", ask {who} to review it" if who else ""
 
 
-def _utc(moment: datetime) -> str:
-    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+_utc = utc_stamp

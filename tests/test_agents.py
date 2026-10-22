@@ -118,3 +118,15 @@ def test_official_bundle_router():
     assert skipped == []
     assert len(rows(text)) == 9
     assert any("deprecated, no stale_after" in row for row in rows(text))
+
+
+def test_router_reads_tags_like_okf_view(make_bundle):
+    """`tags: a, b` (a string, as official bundles write it) is listed, as on the okf view site."""
+    from okf.bundle import Bundle
+    from okf.schema import tags
+
+    root = make_bundle({"index.md": "[a](a.md)\n", "a.md": doc(meta(tags="auth, security"))})
+    [document] = [d for d in Bundle.load(root).concepts()]
+    assert tags(document) == ["auth", "security"]
+    text, _ = render_agents(Bundle.load(root), NOW, root / "AGENTS.md")
+    assert "| Architecture | auth, security |" in text

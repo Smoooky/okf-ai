@@ -12,10 +12,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Callable
 
-from okf.bundle import SCHEME_RE
+from okf.bundle import FENCE_RE as _FENCE, HEADING_RE as _HEADING, SCHEME_RE, closes_fence
 
-_FENCE = re.compile(r"^\s{0,3}(`{3,}|~{3,})\s*([\w+-]*)")
-_HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
 _LIST = re.compile(r"^(\s*)([-*+]|\d+[.)])\s+(.*)$")
 _TABLE_SEP = re.compile(r"^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$")
 _FOOTNOTE = re.compile(r"^\[\^([^\]]+)\]:\s*(.*)$")
@@ -60,7 +58,7 @@ def _blocks(lines: list[str], ctx: _Context) -> tuple[list[str], list[tuple[str,
         if fence:
             mark, language, code = fence.group(1), fence.group(2), []
             i += 1
-            while i < len(lines) and not lines[i].strip().startswith(mark[0] * len(mark)):
+            while i < len(lines) and not closes_fence(lines[i], mark):
                 code.append(lines[i])
                 i += 1
             css = f' class="language-{esc(language)}"' if language else ""

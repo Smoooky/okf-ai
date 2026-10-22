@@ -16,8 +16,8 @@ from importlib import resources
 from pathlib import Path
 
 from okf import __version__, schema
-from okf.bundle import Bundle, Document, load_document
-from okf.git import head_info
+from okf.bundle import Bundle, Document, load_document, relative_path, walk
+from okf.git import head_info, line_url
 from okf.markdown import esc, markdown_html
 from okf.trust import TrustMap, Unit
 from okf.values import parse_instant
@@ -73,7 +73,7 @@ def freshness(doc: Document, now: datetime) -> tuple[str, str]:
     if expires <= now:
         return f"просрочен с {date_ru(expires)}", "fresh-late"
     text = f"через {days} {plural(days, ('день', 'дня', 'дней'))}" if days >= 1 else "сегодня"
-    return text, "fresh-soon" if days <= 30 else ""
+    return text, "fresh-soon" if expires - now <= schema.REVIEW_WINDOW else ""
 
 
 # --- Shared pieces -------------------------------------------------------------------------
@@ -142,11 +142,7 @@ def toolbar(counts: dict[str, int], placeholder: str) -> str:
             f'<kbd aria-hidden="true">/</kbd></label>{chips}</div>')
 
 
-def _rel(path: Path, base: Path) -> str:
-    try:
-        return Path(os.path.relpath(path, base)).as_posix()
-    except ValueError:
-        return Path(path).as_posix()
+_rel = relative_path
 
 
 # --- Reasons in plain words ---------------------------------------------------------------
@@ -332,10 +328,8 @@ def trust_html(trust_map: TrustMap, root: Path, now: datetime, shown: list[Unit]
 
 
 def _where(unit: Unit, root: Path, web: str | None, git_root: Path | None) -> str:
-    text = f"{_rel(unit.path, root)}:{unit.line}"
-    if web and git_root:
-        return f'<a href="{esc(web)}/{esc(_rel(unit.path, git_root))}#L{unit.line}">{esc(text)}</a>'
-    return f"<code>{esc(text)}</code>"
+    text, url = f"{_rel(unit.path, root)}:{unit.line}", line_url(web, git_root, unit.path, unit.line)
+    return f'<a href="{esc(url)}">{esc(text)}</a>' if url else f"<code>{esc(text)}</code>"
 
 
 def _search_text(unit: Unit, root: Path) -> str:
@@ -391,10 +385,9 @@ def find_bundles(path: Path) -> list[Path]:
     if _is_root_index(path / "index.md"):
         return [path]
     found = []
-    for dirpath, dirnames, filenames in os.walk(path):
-        dirnames[:] = sorted(d for d in dirnames if not d.startswith(".") and d not in ("node_modules", "venv"))
-        if "index.md" in filenames and _is_root_index(Path(dirpath) / "index.md"):
-            found.append(Path(dirpath))
+    for directory, dirnames, filenames in walk(path):
+        if "index.md" in filenames and _is_root_index(directory / "index.md"):
+            found.append(directory)
             dirnames[:] = []
     return found
 
@@ -691,11 +684,7 @@ def build_site(bundle: Bundle, out: Path, units: dict[Path, Unit], now: datetime
     return [index, graph, *written]
 
 
-def _tags(doc: Document) -> list[str]:
-    value = (doc.meta or {}).get("tags")
-    if isinstance(value, str):
-        value = [t.strip() for t in value.split(",")]
-    return [str(t) for t in value or [] if str(t).strip()] if isinstance(value, list) else []
+_tags = schema.tags
 
 
 def _instant(value) -> datetime | None:

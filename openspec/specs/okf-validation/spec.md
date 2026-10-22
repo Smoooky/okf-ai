@@ -6,7 +6,7 @@
 ## Requirements
 
 ### Requirement: Состав проверяемых файлов
-Команда `okf validate` SHALL считать документом-концептом каждый файл `.md` бандла, кроме служебных `index.md` и `log.md` на любом уровне и файла `AGENTS.md` в корне бандла, и пропускать скрытые папки, `node_modules`, `__pycache__` и `venv`.
+Команда `okf validate` SHALL считать документом-концептом каждый файл `.md` бандла, кроме служебных `index.md` и `log.md` на любом уровне и файла `AGENTS.md` в корне бандла, и пропускать скрытые папки, `.git`, `node_modules`, `__pycache__`, `venv`, `.venv`, `dist`, `build`, `.tox`, `.pytest_cache`, `.mypy_cache`, `vendor`, `third_party` и `third-party` — тот же список, что у всех команд okf.
 
 #### Scenario: Вложенные служебные файлы не концепты
 - GIVEN в бандле есть `sub/index.md` и `sub/log.md` без шапки

@@ -298,6 +298,13 @@ def head_info(repo_root: Path | None) -> tuple[str | None, str | None]:
     return (None if branch == "HEAD" else branch), sha
 
 
+def line_url(web: str | None, git_root: Path | None, path: Path, line: int) -> str | None:
+    """https://github.com/<repo>/blob/<commit>/<path>#L<line>, or None off GitHub."""
+    if not web or git_root is None:
+        return None
+    return f"{web}/{Path(os.path.relpath(path, git_root)).as_posix()}#L{line}"
+
+
 def web_base(repo_root: Path | None, env=None) -> str | None:
     """https://github.com/<owner>/<repo>/blob/<commit> for links to lines: from the GitHub Actions
     environment, else from the origin remote and HEAD. None if the repository is not on GitHub."""

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime
 from importlib import resources
 from pathlib import Path
 
@@ -21,7 +21,9 @@ from okf.agents import render_agents
 from okf.bundle import SCHEME_RE, Bundle
 from okf.git import History
 from okf.importer import slug
-from okf.trust import _flow, _relative, instruction_units
+from okf.bundle import relative_path as _relative
+from okf.trust import _flow, instruction_units
+from okf.values import utc_stamp
 
 INIT_ACTOR = "process:okf-init"
 AGENTS_MARK = "<!-- okf init: knowledge router -->"
@@ -58,7 +60,7 @@ class Result:
 def init(root: Path, now: datetime, force: bool = False, from_agents: bool = False) -> Result:
     root = Path(root).resolve()
     result = Result()
-    stamp = now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    stamp = utc_stamp(now)
     kb = root / "knowledge"
     docs: dict[str, str] = {}
     for name, (kind, title, description, tags, body) in TEMPLATES.items():

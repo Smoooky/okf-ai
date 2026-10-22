@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from pathlib import Path
 
 from okf import __version__, schema
 from okf.bundle import Bundle, Document
 from okf.report import WARNING, Issue
 
-EXPIRING = timedelta(days=30)
+EXPIRING = schema.REVIEW_WINDOW
 
 # The front matter keeps AGENTS.md a conformant OKF concept for other OKF consumers.
 HEADER = f"""\
@@ -97,8 +97,7 @@ def _document(doc: Document) -> str:
 
 
 def _tags(doc: Document) -> str:
-    tags = doc.get("tags", None)
-    return ", ".join(str(tag) for tag in tags) if isinstance(tags, list) else ""
+    return ", ".join(schema.tags(doc))
 
 
 def _text(value: object) -> str:

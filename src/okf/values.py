@@ -31,6 +31,16 @@ def parse_now(text: str) -> datetime:
     return datetime.combine(date.fromisoformat(text), datetime.min.time(), tzinfo=timezone.utc)
 
 
+def utc_stamp(moment: datetime) -> str:
+    """2026-10-22T12:00:00Z: how okf writes and prints moments."""
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def utc_day(moment: datetime) -> str:
+    """2026-10-22: the day of a moment in UTC."""
+    return moment.astimezone(timezone.utc).date().isoformat()
+
+
 def describe(value: Any) -> str:
     """YAML-ish name of a value's type, for error messages."""
     if value is None:

@@ -28,10 +28,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
-from okf.git import GitError, History, run_gh, run_git
+from okf.git import GitError, History, line_url, run_gh, run_git
 from okf.instructions import discover
 from okf.sources import registry
 from okf.trust import build_map, unit_json
+from okf.values import utc_stamp
 
 LABEL_COLUMNS = ["repo", "file", "line", "section", "source", "type", "extracted_from", "status", "correct",
                  "comment", "url"]
@@ -153,8 +154,8 @@ def _map_repository(spec: RepoSpec, root: Path, now: datetime) -> dict:
             links.append({"repo": spec.name, "file": Path(unit.path).relative_to(root).as_posix(), "line": link["line"],
                           "section": unit.section or "", "source": link["source"], "type": link["type"],
                           "extracted_from": link["text"], "status": link["status"], "correct": "", "comment": "",
-                          "url": f"https://github.com/{spec.name}/blob/{commit}/"
-                                 f"{Path(unit.path).relative_to(root).as_posix()}#L{link['line']}"})
+                          "url": line_url(f"https://github.com/{spec.name}/blob/{commit}", root, unit.path,
+                                          link["line"])})
     statuses = Counter(link["status"].split(":")[0] for link in links)
     row = {
         "commit": commit,
@@ -179,7 +180,7 @@ def _map_repository(spec: RepoSpec, root: Path, now: datetime) -> dict:
         "unknown_links": statuses["unknown"],
         "top_reason": reasons.most_common(1)[0][0] if reasons else "",
     }
-    data = {"repo": spec.name, "commit": commit, "scanned_at": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    data = {"repo": spec.name, "commit": commit, "scanned_at": utc_stamp(now),
             "summary": trust_map.summary(), "units": [unit_json(u, root) for u in trust_map.units],
             "notes": [{"file": Path(p).relative_to(root).as_posix(), "note": n} for p, n in trust_map.notes]}
     return {"row": row, "map": data, "links": links}
@@ -290,7 +291,7 @@ def summary(results: list[dict], now: datetime, seed: int, seconds: float, label
         lines += ["", "## Skipped", "", "| Repository | Reason |", "|---|---|"]
         lines += [f"| {r['repo']} | {r['reason']} |" for r in skipped]
     lines += ["", "To reproduce: `okf scan --repos repos.pinned.txt --now "
-              f"{now.strftime('%Y-%m-%dT%H:%M:%SZ')} --seed {seed}`.", ""]
+              f"{utc_stamp(now)} --seed {seed}`.", ""]
     return "\n".join(lines)
 
 

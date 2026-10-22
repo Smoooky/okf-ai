@@ -37,6 +37,7 @@ from okf.trust import (
     ROUTER_MARK, SIDECAR, Sidecar, TrustMap, _concepts, _relative, _unit_name, find_sidecar, section_hash, sections,
     set_generated,
 )
+from okf.values import utc_stamp
 
 FIX_ACTOR = "process:okf-fix"
 DEFAULT_MODEL = "claude-opus-5-5"
@@ -509,7 +510,7 @@ def _diff(plan: FixPlan, before: dict[Path, list[str]], after: dict[Path, list[s
 
 def apply(plan: FixPlan, git_root: Path | None, now: datetime | None = None) -> list[str]:
     """Write the fixes and record every rewritten unit as generated, not verified. Returns unit names."""
-    stamp = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    stamp = utc_stamp(now or datetime.now(timezone.utc))
     final = plan.after_drafts()
     by_unit: dict[str, tuple[Path, str, str]] = {}
     for edit in plan.edits:

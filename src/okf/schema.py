@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import difflib
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Callable
 
 from okf.report import ERROR, WARNING, Issue
@@ -34,6 +34,8 @@ OKF_VERSION = "0.2"
 STATUSES = ("draft", "stable", "deprecated")
 DEFAULT_STATUS = "stable"
 ATTESTED_COMPUTATION = "Attested Computation"
+# stale_after within this window: "review due" in the router, "через N дней" highlighted in okf view.
+REVIEW_WINDOW = timedelta(days=30)
 
 # Appendix 2 of etc/spec/cli-validator.md. Strict profile only, and only a warning:
 # OKF consumers must tolerate unknown types (§4.1).
@@ -123,6 +125,14 @@ def trust_tier(doc: Document) -> str:
 def status(doc: Document) -> str:
     value = doc.get("status", None)
     return value.strip() if isinstance(value, str) and value.strip() else DEFAULT_STATUS
+
+
+def tags(doc: Document) -> list[str]:
+    """`tags` as a list: a YAML list, or the `a, b` string official bundles also use."""
+    value = doc.get("tags", None)
+    if isinstance(value, str):
+        value = [t.strip() for t in value.split(",")]
+    return [str(t) for t in value if str(t).strip()] if isinstance(value, list) else []
 
 
 def stale_after(doc: Document) -> datetime | None:

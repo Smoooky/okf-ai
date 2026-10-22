@@ -438,3 +438,22 @@ def test_field_errors_point_to_the_line(make_bundle):
     [issue] = validate_bundle(Bundle.load(root))
     lines = (root / "doc.md").read_text(encoding="utf-8").split("\n")
     assert lines[issue.line - 1].strip() == "status: published"
+
+
+def test_every_command_skips_the_same_directories(tmp_path):
+    """One walk: a bundle's vendor/ and build/ are skipped by okf validate as by okf trust and okf view."""
+    from conftest import doc as make_doc, meta as make_meta
+    from okf.bundle import SKIP_DIRS, Bundle, walk
+    from okf.trust import _concepts
+    from okf.view import find_bundles
+
+    root = tmp_path / "kb"
+    for rel in ("index.md", "a.md", "vendor/x.md", "build/y.md", ".hidden/z.md"):
+        (root / rel).parent.mkdir(parents=True, exist_ok=True)
+        (root / rel).write_text('---\nokf_version: "0.2"\n---\n' if rel == "index.md" else make_doc(make_meta()),
+                                encoding="utf-8")
+    assert {"vendor", "build", "node_modules", ".git"} <= SKIP_DIRS
+    assert [p.name for p in Bundle.load(root).documents] == ["a.md", "index.md"]
+    assert [p.name for p, _ in _concepts(tmp_path, None)] == ["a.md"]
+    assert find_bundles(tmp_path) == [root.resolve()]
+    assert [d.name for d, _, _ in walk(root)] == ["kb"]

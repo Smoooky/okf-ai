@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Mapping
 
+from okf.values import utc_day
+
 
 class Unavailable(Exception):
     """The resource cannot be read now (no access, not found, rate limits, network): status unknown."""
@@ -105,5 +107,4 @@ def parse_time(value) -> datetime | None:
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
-def day(moment: datetime) -> str:
-    return moment.astimezone(timezone.utc).date().isoformat()
+day = utc_day

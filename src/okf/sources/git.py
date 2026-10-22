@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import unquote
 
-from okf.bundle import SCHEME_RE, Document
+from okf.bundle import SCHEME_RE, Document, relative_path as _relative_path
 from okf.git import History, commit_at, diff_since, is_glob, source_matches
 from okf.sources.base import Source
 
@@ -94,7 +94,5 @@ def normalize_repo_path(path: str) -> str:
 
 
 def relative_path(path: Path, repo_root: Path) -> str:
-    try:
-        return Path(os.path.relpath(path, repo_root)).as_posix()
-    except ValueError:  # another drive on Windows
-        return ""
+    """"" on another Windows drive: such a path is never in this repository."""
+    return _relative_path(path, repo_root, fallback="")

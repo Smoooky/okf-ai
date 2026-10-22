@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Callable
 
@@ -23,6 +23,7 @@ from okf.bundle import load_document
 from okf.sources.confluence import ConfluenceSource, markdown, page_ref
 from okf.sources.notion import SNAPSHOTS, NotionSource, page_id as notion_id
 from okf.trust import _flow
+from okf.values import utc_stamp
 
 IMPORT_ACTOR = "process:okf-import"
 DEFAULT_TYPE = "Guide"
@@ -83,7 +84,7 @@ def write_items(items: list[Item], out: Path, kind: str | None, now: datetime, s
     out.mkdir(parents=True, exist_ok=True)
     existing = _imported_files(out, key)
     taken = {p.name for p in out.glob("*.md")}
-    stamp = now.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    stamp = utc_stamp(now)
     result = []
     for item in items:
         path = existing.get(item.id)
@@ -205,4 +206,4 @@ def _index(out: Path, new: list[Imported], system: str) -> None:
 
 
 def _stamp(moment: datetime | None) -> str | None:
-    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if moment else None
+    return utc_stamp(moment) if moment else None

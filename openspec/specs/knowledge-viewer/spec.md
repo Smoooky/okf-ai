@@ -111,7 +111,7 @@
 - THEN тема меняется, ошибок нет, после перезагрузки снова системная
 
 ### Requirement: Сайт базы знаний
-Команда `okf view [repo] [--out DIR]` SHALL находить бандлы — сам каталог, если в нём корневой `index.md` с `okf_version`, иначе каждый такой каталог внутри, кроме скрытых, `node_modules` и `venv`, — и писать сайт в `DIR` (по умолчанию `site`), а при нескольких бандлах — в `DIR/<имя бандла>/`, печатая в stderr `okf view: <bundle>: <N> documents, open <DIR>/index.html`.
+Команда `okf view [repo] [--out DIR]` SHALL находить бандлы — сам каталог, если в нём корневой `index.md` с `okf_version`, иначе каждый такой каталог внутри, кроме папок, которые пропускают все команды okf (скрытые, `node_modules`, `venv`, `dist`, `build`, `vendor` и другие), — и писать сайт в `DIR` (по умолчанию `site`), а при нескольких бандлах — в `DIR/<имя бандла>/`, печатая в stderr `okf view: <bundle>: <N> documents, open <DIR>/index.html`.
 
 #### Scenario: Демо
 - GIVEN `examples/demo` с бандлом `knowledge`

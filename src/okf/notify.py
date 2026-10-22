@@ -20,7 +20,9 @@ import yaml
 
 from okf import __version__
 from okf.sources.http import HttpFailure, fetch
-from okf.trust import TrustMap, Unit, _relative
+from okf.bundle import relative_path as _relative
+from okf.git import line_url
+from okf.trust import TrustMap, Unit
 
 NOBODY = "nobody yet"
 
@@ -51,9 +53,7 @@ def verify_command(units: list[Unit], root: Path) -> str:
 
 
 def _link(unit: Unit, web: str | None, git_root: Path | None) -> str | None:
-    if not web or git_root is None:
-        return None
-    return f"{web}/{_relative(unit.path, git_root)}#L{unit.line}"
+    return line_url(web, git_root, unit.path, unit.line)
 
 
 def slack_message(reminder: Reminder, root: Path, web: str | None, git_root: Path | None,

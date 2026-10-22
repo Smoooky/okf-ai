@@ -6,7 +6,7 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterable, Iterator
 from urllib.parse import unquote
 
 import yaml
@@ -14,7 +14,10 @@ import yaml
 from okf.schema import GENERATED_FILES, RESERVED_FILES
 from okf.values import MISSING, describe
 
-IGNORED_DIRS = {"node_modules", "__pycache__", "venv"}
+# Directories no okf command looks into: version control, dependencies, virtual environments, caches,
+# build output and vendored code (other projects' AGENTS.md are not this repository's instructions).
+SKIP_DIRS = {".git", "node_modules", "__pycache__", "venv", ".venv", "dist", "build", ".tox", ".pytest_cache",
+             ".mypy_cache", "vendor", "third_party", "third-party"}
 
 
 class _Loader(yaml.SafeLoader):
@@ -73,11 +76,10 @@ class Document:
 
     def headings(self, level: int) -> Iterator[tuple[str, int]]:
         """ATX headings of one level in the body, with line numbers (code is skipped)."""
-        pattern = re.compile(rf"^#{{{level}}}\s+(.+?)\s*#*\s*$")
         for line, number in _markdown_lines(self.body, self.body_line):
-            match = pattern.match(line)
-            if match:
-                yield match.group(1), number
+            match = HEADING_RE.match(line)
+            if match and len(match.group(1)) == level:
+                yield match.group(2), number
 
     def get(self, dotted: str, default: Any = MISSING) -> Any:
         """Nested front matter value by dotted path, e.g. `generated.by`."""
@@ -138,12 +140,26 @@ class Bundle:
         return Path(os.path.normpath(base / path.lstrip("/")))
 
 
-def discover(root: Path) -> list[Path]:
-    found = []
+def walk(root: Path, keep_hidden: Iterable[str] = ()) -> Iterator[tuple[Path, list[str], list[str]]]:
+    """os.walk in sorted order without SKIP_DIRS and hidden directories (except `keep_hidden`).
+    The one way every command looks through a repository or a bundle; clearing the yielded
+    directory list stops the walk below that directory."""
     for dirpath, dirnames, filenames in os.walk(root):
-        dirnames[:] = sorted(d for d in dirnames if not d.startswith(".") and d not in IGNORED_DIRS)
-        found.extend(Path(dirpath) / name for name in sorted(filenames) if name.lower().endswith(".md"))
-    return found
+        dirnames[:] = sorted(d for d in dirnames if d not in SKIP_DIRS and (not d.startswith(".") or d in keep_hidden))
+        yield Path(dirpath), dirnames, sorted(filenames)
+
+
+def discover(root: Path) -> list[Path]:
+    return [directory / name for directory, _, filenames in walk(root) for name in filenames
+            if name.lower().endswith(".md")]
+
+
+def relative_path(path: Path, base: Path, fallback: str | None = None) -> str:
+    """`path` from `base` with forward slashes; on another Windows drive, `fallback` (else the path itself)."""
+    try:
+        return Path(os.path.relpath(path, base)).as_posix()
+    except ValueError:
+        return Path(path).as_posix() if fallback is None else fallback
 
 
 def load_document(path: Path, root: Path) -> Document:
@@ -202,7 +218,8 @@ def _parse_front_matter(doc: Document) -> None:
         doc.meta = meta
 
 
-FENCE_RE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
+FENCE_RE = re.compile(r"^\s{0,3}(`{3,}|~{3,})\s*([\w+-]*)")  # a code fence and its info word (the language)
+HEADING_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*#*\s*$")
 CODE_SPAN_RE = re.compile(r"(`+).+?\1")
 LINK_RE = re.compile(
     r"!?\[(?:[^\[\]]|\[[^\[\]]*\])*\]"  # [text], one level of nested brackets allowed
@@ -213,15 +230,34 @@ REF_DEF_RE = re.compile(r"^\s{0,3}\[(?!\^)[^\]]+\]:\s*(<[^>\n]*>|\S+)")  # footn
 SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*:")
 
 
+def closes_fence(line: str, fence: str) -> bool:
+    """A closing fence: the same character, at least as long, nothing after it."""
+    match = FENCE_RE.match(line)
+    return bool(match) and match.group(1)[0] == fence[0] and len(match.group(1)) >= len(fence) \
+        and not line.strip()[len(match.group(1)):].strip()
+
+
+def fenced(lines: list[str]) -> Iterator[tuple[int, str, str | None, bool]]:
+    """(index, line, info, is_fence) per line: `info` is None outside fenced code, else the fence's
+    language ("" without one); `is_fence` marks the opening and closing fence lines themselves."""
+    fence, info = None, ""
+    for index, line in enumerate(lines):
+        if fence is None:
+            match = FENCE_RE.match(line)
+            if match:
+                fence, info = match.group(1), match.group(2)
+                yield index, line, info, True
+            else:
+                yield index, line, None, False
+        elif closes_fence(line, fence):
+            fence = None
+            yield index, line, info, True
+        else:
+            yield index, line, info, False
+
+
 def _markdown_lines(body: str, first_line: int) -> Iterator[tuple[str, int]]:
     """Body lines outside fenced code blocks."""
-    fence = None
-    for offset, line in enumerate(body.split("\n")):
-        match = FENCE_RE.match(line)
-        if fence is None and match:
-            fence = match.group(1)
-        elif fence is not None:
-            if match and match.group(1)[0] == fence[0] and len(match.group(1)) >= len(fence):
-                fence = None
-        else:
+    for offset, line, info, _ in fenced(body.split("\n")):
+        if info is None:
             yield line, first_line + offset

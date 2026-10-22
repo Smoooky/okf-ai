@@ -31,7 +31,7 @@
 - THEN `.okf/trust.yml` создан и содержит `units: []`
 
 ### Requirement: Workflow проверки
-Команда `okf init` SHALL создавать `.github/workflows/okf.yml` из шаблона с теми же шагами задачи `knowledge`, что в workflow самого okf-ai, но с `OKF_REPO: .`, `OKF_BUNDLE: knowledge`, пустым `OKF_VALIDATE_ARGS`, установкой okf из git-репозитория okf-ai и без задачи модульных тестов.
+Команда `okf init` SHALL создавать `.github/workflows/okf.yml` из шаблона, который совпадает с workflow самого okf-ai целиком (это проверяет тест), кроме строки-заголовка, `OKF_REPO: .`, `OKF_BUNDLE: knowledge`, пустого `OKF_VALIDATE_ARGS`, установки okf из git-репозитория okf-ai и задачи модульных тестов (её в шаблоне нет).
 
 #### Scenario: Настройки шаблона
 - GIVEN `okf init` выполнен

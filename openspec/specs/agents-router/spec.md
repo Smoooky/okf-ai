@@ -6,7 +6,7 @@
 ## Requirements
 
 ### Requirement: Генерация роутера
-Команда `okf agents <bundle>` SHALL записывать в `<bundle>/AGENTS.md` таблицу `| Document | Type | Tags | Freshness | Trust | Path |` с одной строкой на каждый документ-концепт с корректной шапкой и печатать в stderr `okf agents: wrote <path> (<N> documents)`.
+Команда `okf agents <bundle>` SHALL записывать в `<bundle>/AGENTS.md` таблицу `| Document | Type | Tags | Freshness | Trust | Path |` с одной строкой на каждый документ-концепт с корректной шапкой (теги — YAML-список или строка `a, b`, как их читает и `okf view`) и печатать в stderr `okf agents: wrote <path> (<N> documents)`.
 
 #### Scenario: Роутер для бандла
 - GIVEN бандл с документом `auth_flow.md` (`title: Auth flow`, `description: SMS login and JWT tokens.`, `type: Architecture`, `tags: [auth, security]`, `stale_after: 2027-10-19T00:00:00Z`, проверен `human:teamlead_ivan`)

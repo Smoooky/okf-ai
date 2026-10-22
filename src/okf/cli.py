@@ -35,7 +35,7 @@ from okf.trust import (
 )
 from okf.validate import has_errors, validate_bundle
 from okf.view import build_site, find_bundles, trust_html
-from okf.values import parse_now
+from okf.values import parse_now, utc_stamp
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -453,7 +453,7 @@ def _verify(args: argparse.Namespace) -> int:
     except TrustError as exc:
         print(f"okf: error: {exc}", file=sys.stderr)
         return 2
-    stamp = at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    stamp = utc_stamp(at)
     for name in names:
         print(f"okf verify: {name} verified by {by} at {stamp}", file=sys.stderr)
     if skipped:
