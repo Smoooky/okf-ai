@@ -11,12 +11,12 @@ from __future__ import annotations
 
 import json
 import os
-import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 from okf.fix import FixPlan, apply
+from okf.git import GitError, git_config, run_gh, run_git
 
 TITLE = "[OKF-Update]"
 MARK = "<!-- okf-update -->"
@@ -103,26 +103,21 @@ def _open_update_pr(git_root: Path, base: str) -> dict | None:
 def gh(cwd: Path, *args: str) -> str:
     """The GitHub CLI (tests replace this function)."""
     try:
-        result = subprocess.run(["gh", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8")
-    except OSError as exc:
-        raise PrError(f"cannot run gh (https://cli.github.com): {exc}") from None
-    if result.returncode != 0:
-        raise PrError(f"gh {args[0]} {args[1]} failed: {result.stderr.strip()}")
-    return result.stdout
+        return run_gh(list(args), cwd)
+    except GitError as exc:
+        raise PrError(str(exc)) from None
 
 
 def _git(cwd: Path, *args: str) -> str:
-    result = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8")
-    if result.returncode != 0:
-        command = next(a for i, a in enumerate(args) if a != "-c" and (i == 0 or args[i - 1] != "-c"))
-        raise PrError(f"git {command} failed: {result.stderr.strip()}")
-    return result.stdout
+    try:
+        return run_git(list(args), cwd)
+    except GitError as exc:
+        raise PrError(str(exc)) from None
 
 
 def _identity(git_root: Path) -> list[str]:
     """okf-ai as the committer when git has no user (a fresh CI runner)."""
-    configured = subprocess.run(["git", "config", "user.email"], cwd=git_root, capture_output=True, text=True)
-    return [] if configured.stdout.strip() else ["-c", f"user.name={BOT[0]}", "-c", f"user.email={BOT[1]}"]
+    return [] if git_config("user.email", git_root) else ["-c", f"user.name={BOT[0]}", "-c", f"user.email={BOT[1]}"]
 
 
 def _plain(body: str) -> str:

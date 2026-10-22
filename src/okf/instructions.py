@@ -15,7 +15,6 @@ import json
 import os
 import re
 import shlex
-import subprocess
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -23,7 +22,7 @@ from pathlib import Path
 from urllib.parse import unquote
 
 from okf.bundle import CODE_SPAN_RE, LINK_RE, SCHEME_RE, front_matter_end
-from okf.git import Change, History, toplevel
+from okf.git import Change, History, git_bytes, git_ok, toplevel
 from okf.report import ERROR, INFO, WARNING, Issue
 
 # Vendored code brings other projects' AGENTS.md along: they are not this repository's instructions.
@@ -557,12 +556,7 @@ class Repository:
             return True
         key = ("ignored", relative)
         if key not in self._cache:
-            try:
-                result = subprocess.run(["git", "check-ignore", "--no-index", "-q", "--", relative], cwd=self.root,
-                                        capture_output=True, check=False)
-                self._cache[key] = result.returncode == 0
-            except OSError:
-                self._cache[key] = False
+            self._cache[key] = git_ok(["check-ignore", "--no-index", "-q", "--", relative], self.root)
         return self._cache[key]
 
     def moved(self, path: Path) -> tuple[Path, datetime | None] | None:
@@ -585,11 +579,8 @@ class Repository:
     def _index(self) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
         """Repository files and directories by name: `git ls-files`, or a walk outside git."""
         if "index" not in self._cache:
-            try:
-                result = subprocess.run(["git", "ls-files", "-z"], cwd=self.root, capture_output=True, check=False)
-                listed = result.stdout.decode("utf-8", "replace").split("\0") if result.returncode == 0 else []
-            except OSError:
-                listed = []
+            output = git_bytes(["ls-files", "-z"], self.root)
+            listed = output.decode("utf-8", "replace").split("\0") if output is not None else []
             if not listed or listed == [""]:
                 listed = [
                     _relative(Path(d) / f, self.root)

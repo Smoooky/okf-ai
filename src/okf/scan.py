@@ -18,7 +18,6 @@ import re
 import shutil
 import stat
 import statistics
-import subprocess
 import sys
 import tempfile
 import time
@@ -29,7 +28,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable
 
-from okf.git import History
+from okf.git import GitError, History, run_gh, run_git
 from okf.instructions import discover
 from okf.sources import registry
 from okf.trust import build_map, unit_json
@@ -190,19 +189,18 @@ def _clone(spec: RepoSpec, directory: Path, timeout: int) -> str | None:
     """Partial clone with full history but file contents on demand. Returns why it failed, or None."""
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_ASKPASS": "", "SSH_ASKPASS": "", "GCM_INTERACTIVE": "never"}
     # core.longpaths: deep trees fail on Windows without it ("Filename too long")
-    command = ["git", "-c", "credential.helper=", "clone", "--filter=blob:none", "--no-tags", "--quiet",
+    command = ["-c", "credential.helper=", "clone", "--filter=blob:none", "--no-tags", "--quiet",
                "--config", "core.longpaths=true", spec.url, str(directory)]
     try:
-        result = subprocess.run(command, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                                timeout=timeout, env=env, stdin=subprocess.DEVNULL)
-    except subprocess.TimeoutExpired:
-        return f"timeout: clone took longer than {timeout} s"
-    if result.returncode != 0:
-        return _clone_failure(result.stderr)
+        run_git(command, None, timeout=timeout, env=env)
+    except GitError as exc:
+        if "took longer than" in str(exc):
+            return f"timeout: clone took longer than {timeout} s"
+        return _clone_failure(str(exc).removeprefix("git clone failed: "))
     if spec.ref:
-        checkout = subprocess.run(["git", "checkout", "-q", spec.ref], cwd=directory, capture_output=True, text=True,
-                                  env=env, timeout=timeout)
-        if checkout.returncode != 0:
+        try:
+            run_git(["checkout", "-q", spec.ref], directory, timeout=timeout, env=env)
+        except GitError:
             return f"cannot check out {spec.ref}"
     return None
 
@@ -370,7 +368,7 @@ def find_repos(count: int, months: int = 3, log: Callable[[str], None] = lambda 
 
     Uses GitHub code search through `gh api`, so `gh` must be installed and signed in (`gh auth login`).
     """
-    if shutil.which("gh") is None or subprocess.run(["gh", "auth", "status"], capture_output=True).returncode != 0:
+    if shutil.which("gh") is None or not _gh_signed_in():
         raise ScanError("finding repositories needs the GitHub CLI signed in (gh auth login); "
                         "or write repos.txt by hand, one owner/repo per line")
     since = datetime.now(timezone.utc) - timedelta(days=30 * months)
@@ -400,23 +398,29 @@ def find_repos(count: int, months: int = 3, log: Callable[[str], None] = lambda 
 
 
 def _gh(args: list[str]) -> str:
-    for attempt in range(3):
-        result = subprocess.run(["gh", *args], capture_output=True, text=True, encoding="utf-8", errors="replace")
-        if result.returncode == 0:
-            return result.stdout
-        if "rate limit" in result.stderr.lower() and attempt < 2:
-            time.sleep(30)
-            continue
+    """gh output, or "" when it fails (a search page that does not come is skipped)."""
+    try:
+        return run_gh(args, rate_limit_waits=2, sleep=time.sleep)
+    except GitError:
         return ""
-    return ""
+
+
+def _gh_signed_in() -> bool:
+    try:
+        run_gh(["auth", "status"])
+        return True
+    except GitError:
+        return False
 
 
 # --- Helpers ------------------------------------------------------------------------
 
 
 def _git(root: Path, *args: str) -> str:
-    result = subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, encoding="utf-8")
-    return result.stdout.strip()
+    try:
+        return run_git(list(args), root).strip()
+    except GitError:
+        return ""
 
 
 def _write_csv(path: Path, columns: list[str], rows: list[dict]) -> None:

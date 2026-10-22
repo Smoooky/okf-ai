@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import re
 import shutil
-import subprocess
 import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -30,6 +29,7 @@ import yaml
 from okf.agents import render_agents
 from okf.bundle import Bundle
 from okf.fix import FixError, Provider
+from okf.git import GitError, git_ok, run_git
 
 MAX_OPEN = 5
 OPEN_SCHEMA = {
@@ -174,16 +174,16 @@ def at_ref(git_root: Path, ref: str) -> tuple[Path, Path]:
     """A temporary worktree of `ref`: (its root, the directory to remove afterwards)."""
     temp = Path(tempfile.mkdtemp(prefix="okf-shadow-")).resolve()  # Windows: no 8.3 short names
     target = temp / "base"
-    result = subprocess.run(["git", "worktree", "add", "-q", "--detach", str(target), ref], cwd=git_root,
-                            capture_output=True, text=True, encoding="utf-8")
-    if result.returncode != 0:
+    try:
+        run_git(["worktree", "add", "-q", "--detach", str(target), ref], git_root)
+    except GitError as exc:
         shutil.rmtree(temp, ignore_errors=True)
-        raise ShadowError(f"cannot check out {ref}: {result.stderr.strip()}")
+        raise ShadowError(f"cannot check out {ref}: {str(exc).split(': ', 1)[-1]}") from None
     return target, temp
 
 
 def drop_worktree(git_root: Path, target: Path, temp: Path) -> None:
-    subprocess.run(["git", "worktree", "remove", "--force", str(target)], cwd=git_root, capture_output=True)
+    git_ok(["worktree", "remove", "--force", str(target)], git_root)
     shutil.rmtree(temp, ignore_errors=True)
 
 

@@ -47,7 +47,7 @@ def changed_paths(changes: list[Change]) -> list[str]:
 
 def toplevel(path: Path) -> Path | None:
     try:
-        return Path(_git(["rev-parse", "--show-toplevel"], cwd=path).strip())
+        return Path(run_git(["rev-parse", "--show-toplevel"], cwd=path).strip())
     except GitError:
         return None
 
@@ -60,14 +60,14 @@ SHALLOW_HINT = (
 
 def is_shallow(repo_root: Path) -> bool:
     try:
-        return _git(["rev-parse", "--is-shallow-repository"], cwd=repo_root).strip() == "true"
+        return run_git(["rev-parse", "--is-shallow-repository"], cwd=repo_root).strip() == "true"
     except GitError:
         return False
 
 
 def merge_base(repo_root: Path, base: str) -> str:
     try:
-        return _git(["merge-base", base, "HEAD"], cwd=repo_root).strip()
+        return run_git(["merge-base", base, "HEAD"], cwd=repo_root).strip()
     except GitError as exc:
         if is_shallow(repo_root):
             raise GitError(f"{exc}; {SHALLOW_HINT}") from exc
@@ -77,7 +77,7 @@ def merge_base(repo_root: Path, base: str) -> str:
 def changed_lines(repo_root: Path, commit: str, path: str) -> set[int]:
     """Lines of the current file that changed since `commit`; a pure deletion marks the lines around it."""
     try:
-        output = _git(["diff", "-U0", "--no-color", "--no-ext-diff", commit, "--", path], cwd=repo_root)
+        output = run_git(["diff", "-U0", "--no-color", "--no-ext-diff", commit, "--", path], cwd=repo_root)
     except GitError:
         return set()
     lines: set[int] = set()
@@ -89,7 +89,7 @@ def changed_lines(repo_root: Path, commit: str, path: str) -> set[int]:
 
 def changes_since(repo_root: Path, base: str) -> list[Change]:
     """Changes since the merge base with `base`, uncommitted ones included, with renames detected."""
-    output = _git(["diff", "--name-status", "-M", "-z", merge_base(repo_root, base)], cwd=repo_root)
+    output = run_git(["diff", "--name-status", "-M", "-z", merge_base(repo_root, base)], cwd=repo_root)
     parts = output.split("\0")
     result, i = [], 0
     while i < len(parts) and parts[i]:
@@ -139,11 +139,11 @@ class History:
         when = None
         for _ in range(5):  # a file renamed a few times
             try:
-                last = _git(["log", "-1", "--format=%H %cI", "--", current], cwd=self.root).split()
+                last = run_git(["log", "-1", "--format=%H %cI", "--", current], cwd=self.root).split()
                 if len(last) != 2:
                     return None
                 # Without a pathspec, so that git pairs the old and the new name.
-                shown = _git(["show", "-M", "--name-status", "--format=", last[0]], cwd=self.root)
+                shown = run_git(["show", "-M", "--name-status", "--format=", last[0]], cwd=self.root)
             except GitError:
                 return None
             when = _instant(last[1])
@@ -171,7 +171,7 @@ class History:
                 spec = f":(glob){relative}" if is_glob(relative) else relative
                 follow = ["--follow"] if (self.root / relative).is_file() else []
                 try:
-                    output = _git(["log", "-1", *follow, "--format=%cI", "--", spec], cwd=self.root).strip()
+                    output = run_git(["log", "-1", *follow, "--format=%cI", "--", spec], cwd=self.root).strip()
                 except GitError:
                     output = ""
                 self._last[relative] = _instant(output)
@@ -185,7 +185,7 @@ class History:
             relative = self.relative(path)
             if self.dated and relative is not None:
                 try:
-                    blamed = _blame(_git(["blame", "--porcelain", "--", relative], cwd=self.root))
+                    blamed = _blame(run_git(["blame", "--porcelain", "--", relative], cwd=self.root))
                     dates = [d or self._modified(path) for d in blamed]
                 except GitError:  # not tracked yet: every line is as new as the file
                     lines = path.read_text(encoding="utf-8", errors="replace").count("\n") + 1
@@ -199,7 +199,7 @@ class History:
             self._dirty = set()
             if self.root is not None:
                 try:
-                    output = _git(["status", "--porcelain=v1", "-z", "--untracked-files=all"], cwd=self.root)
+                    output = run_git(["status", "--porcelain=v1", "-z", "--untracked-files=all"], cwd=self.root)
                 except GitError:
                     output = ""
                 parts, i = output.split("\0"), 0
@@ -254,7 +254,7 @@ EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"  # what a diff "since be
 def commit_at(repo_root: Path, moment: datetime) -> str:
     """The last commit on HEAD at `moment` (the empty tree if the history starts later)."""
     try:
-        found = _git(["rev-list", "-1", f"--before={moment.astimezone(timezone.utc).isoformat()}", "HEAD"],
+        found = run_git(["rev-list", "-1", f"--before={moment.astimezone(timezone.utc).isoformat()}", "HEAD"],
                      cwd=repo_root).strip()
     except GitError:
         found = ""
@@ -266,14 +266,14 @@ def diff_since(repo_root: Path, commit: str, paths: list[str]) -> str:
     if not paths:
         return ""
     try:
-        return _git(["diff", "--no-color", "--no-ext-diff", "-M", commit, "--", *paths], cwd=repo_root)
+        return run_git(["diff", "--no-color", "--no-ext-diff", "-M", commit, "--", *paths], cwd=repo_root)
     except GitError:
         return ""
 
 
 def file_at(repo_root: Path, commit: str, path: str) -> str | None:
     try:
-        return _git(["show", f"{commit}:{path}"], cwd=repo_root)
+        return run_git(["show", f"{commit}:{path}"], cwd=repo_root)
     except GitError:
         return None
 
@@ -281,7 +281,7 @@ def file_at(repo_root: Path, commit: str, path: str) -> str | None:
 def commits_changing_count(repo_root: Path, text: str, path: str) -> list[str]:
     """Commits that added or removed `text` in `path`, newest first (`git log -S`)."""
     try:
-        return _git(["log", "--format=%H", f"-S{text}", "--", path], cwd=repo_root).split()
+        return run_git(["log", "--format=%H", f"-S{text}", "--", path], cwd=repo_root).split()
     except GitError:
         return []
 
@@ -291,8 +291,8 @@ def head_info(repo_root: Path | None) -> tuple[str | None, str | None]:
     if repo_root is None:
         return None, None
     try:
-        branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_root).strip()
-        sha = _git(["rev-parse", "--short", "HEAD"], cwd=repo_root).strip()
+        branch = run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_root).strip()
+        sha = run_git(["rev-parse", "--short", "HEAD"], cwd=repo_root).strip()
     except GitError:
         return None, None
     return (None if branch == "HEAD" else branch), sha
@@ -308,8 +308,8 @@ def web_base(repo_root: Path | None, env=None) -> str | None:
     if repo_root is None:
         return None
     try:
-        remote = _git(["remote", "get-url", "origin"], cwd=repo_root).strip()
-        commit = _git(["rev-parse", "HEAD"], cwd=repo_root).strip()
+        remote = run_git(["remote", "get-url", "origin"], cwd=repo_root).strip()
+        commit = run_git(["rev-parse", "HEAD"], cwd=repo_root).strip()
     except GitError:
         return None
     match = re.match(r"^(?:https://(?:[^@/]+@)?github\.com/|git@github\.com:|ssh://git@github\.com/)"
@@ -317,13 +317,78 @@ def web_base(repo_root: Path | None, env=None) -> str | None:
     return f"https://github.com/{match.group(1)}/blob/{commit}" if match else None
 
 
-def _git(args: list[str], cwd: Path) -> str:
+# --- Running git and gh: every okf command goes through these --------------------------
+
+
+def _run(tool: str, args: list[str], cwd: Path | None, timeout: float | None = None,
+         env: dict | None = None) -> subprocess.CompletedProcess:
     try:
-        result = subprocess.run(
-            ["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8", check=False
-        )
+        return subprocess.run([tool, *args], cwd=cwd, capture_output=True, stdin=subprocess.DEVNULL,
+                              timeout=timeout, env=env, check=False)
     except OSError as exc:
-        raise GitError(f"cannot run git: {exc}") from exc
+        hint = " (https://cli.github.com)" if tool == "gh" else ""
+        raise GitError(f"cannot run {tool}{hint}: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise GitError(f"{tool} {_command(args)} took longer than {timeout:g} s") from exc
+
+
+def _command(args: list[str]) -> str:
+    """The subcommand for messages: `git -c user.name=x commit -m ...` -> `commit`."""
+    words = [a for i, a in enumerate(args) if a != "-c" and (i == 0 or args[i - 1] != "-c")]
+    return " ".join(words[:2]) if words and words[0] in ("pr", "api", "auth", "worktree") else (words or [""])[0]
+
+
+def run_git(args: list[str], cwd: Path | None, *, timeout: float | None = None, env: dict | None = None) -> str:
+    """git's stdout; a failure raises GitError("git <subcommand> failed: <stderr>")."""
+    result = _run("git", args, cwd, timeout, env)
     if result.returncode != 0:
-        raise GitError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
-    return result.stdout
+        stderr = result.stderr.decode("utf-8", "replace").strip()
+        raise GitError(f"git {_command(args)} failed: {stderr}")
+    return result.stdout.decode("utf-8", "replace")
+
+
+def git_ok(args: list[str], cwd: Path | None) -> bool:
+    """Did git succeed (exit 0)? False if git cannot run."""
+    try:
+        return _run("git", args, cwd).returncode == 0
+    except GitError:
+        return False
+
+
+def git_bytes(args: list[str], cwd: Path | None) -> bytes | None:
+    """Raw stdout (e.g. `ls-files -z`), None on any failure."""
+    try:
+        result = _run("git", args, cwd)
+    except GitError:
+        return None
+    return result.stdout if result.returncode == 0 else None
+
+
+def git_config(key: str, cwd: Path | None) -> str | None:
+    """A git setting (`user.email`), or None when it is not set or git cannot run."""
+    try:
+        return run_git(["config", key], cwd).strip() or None
+    except GitError:
+        return None
+
+
+def run_gh(args: list[str], cwd: Path | None = None, rate_limit_waits: int = 0,
+           sleep=None) -> str:
+    """The GitHub CLI's stdout; a failure raises GitError("gh <subcommand> failed: <stderr>").
+    With `rate_limit_waits`, a rate-limited call waits 30 s and tries again that many times."""
+    for attempt in range(rate_limit_waits + 1):
+        result = _run("gh", args, cwd)
+        if result.returncode == 0:
+            return result.stdout.decode("utf-8", "replace")
+        stderr = result.stderr.decode("utf-8", "replace").strip()
+        if "rate limit" in stderr.lower() and attempt < rate_limit_waits:
+            (sleep or _sleep)(30)
+            continue
+        raise GitError(f"gh {_command(args)} failed: {stderr}")
+    raise GitError(f"gh {_command(args)} failed")  # not reached
+
+
+def _sleep(seconds: float) -> None:
+    import time
+
+    time.sleep(seconds)

@@ -17,7 +17,6 @@ from __future__ import annotations
 import hashlib
 import os
 import re
-import subprocess
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -26,7 +25,7 @@ import yaml
 
 from okf import schema
 from okf.bundle import Bundle, Document, front_matter_end, load_document, load_yaml, opens_front_matter
-from okf.git import Change, History, changed_lines, changed_paths
+from okf.git import Change, History, changed_lines, changed_paths, git_config
 from okf.instructions import (
     DOCUMENT_SUFFIXES, FENCE_INFO_RE, SKIP_DIRS, InstructionFile, Repository, discover, instruction_scope,
     references,
@@ -566,11 +565,7 @@ def find_sidecar(start: Path, stop: Path | None) -> Path | None:
 def default_actor(cwd: Path) -> str:
     """human:<git user.email>, else human:<user.name>."""
     for key in ("user.email", "user.name"):
-        try:
-            value = subprocess.run(["git", "config", key], cwd=cwd, capture_output=True, text=True,
-                                   encoding="utf-8").stdout.strip()
-        except OSError:
-            value = ""
+        value = git_config(key, cwd)
         if value:
             return "human:" + re.sub(r"\s+", "-", value)
     raise TrustError("cannot tell who verifies: set git config user.email or pass --by human:<id>")
