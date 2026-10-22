@@ -87,10 +87,27 @@ def test_cli_init(tmp_path, capsys):
     assert "kept" in capsys.readouterr().err
 
 
-def test_workflow_template_follows_the_repository_workflow():
-    """The workflow okf init writes has the same check steps as the one okf-ai runs on itself."""
-    ours = yaml.safe_load((REPO_ROOT / ".github/workflows/okf.yml").read_text(encoding="utf-8"))
-    template = yaml.safe_load((REPO_ROOT / "src/okf/templates/okf.yml").read_text(encoding="utf-8"))
-    names = [[s.get("name") or s.get("uses") for s in w["jobs"]["knowledge"]["steps"]] for w in (ours, template)]
-    assert names[0] == names[1]
-    assert "tests" not in template["jobs"]
+# The only ways the workflow okf init writes may differ from the one okf-ai runs on itself:
+# (text in this repository's workflow, text in the template). Anything else is a drift.
+TEMPLATE_HEADER = "# Written by `okf init` (okf-ai): checks agent instructions and the OKF knowledge on every pull request.\n"
+WORKFLOW_DIFFERENCES = [
+    ("  OKF_REPO: examples/demo  #", "  OKF_REPO: .  #"),
+    ("  OKF_BUNDLE: examples/demo/knowledge  #", "  OKF_BUNDLE: knowledge  #"),
+    ("  OKF_VALIDATE_ARGS: --strict  # okf-ai team profile; empty for plain OKF v0.2 conformance",
+     '  OKF_VALIDATE_ARGS: ""  # plain OKF v0.2; --strict adds the okf-ai team rules (verified, stale_after, ...)'),
+    ('pip install ".[llm]"', 'pip install "okf-ai[llm] @ git+https://github.com/Smoooky/okf-ai"'),
+]
+
+
+def test_workflow_template_is_the_repository_workflow_with_listed_differences():
+    """src/okf/templates/okf.yml is .github/workflows/okf.yml without the unit-test job, plus the
+    header and the replacements in WORKFLOW_DIFFERENCES: edit one, then the other, or this fails."""
+    ours = (REPO_ROOT / ".github/workflows/okf.yml").read_text(encoding="utf-8").replace("\r\n", "\n")
+    template = (REPO_ROOT / "src/okf/templates/okf.yml").read_text(encoding="utf-8").replace("\r\n", "\n")
+    start, end = ours.index("  tests:\n"), ours.index("  knowledge:\n")
+    expected = TEMPLATE_HEADER + ours[:start] + ours[end:]
+    for old, new in WORKFLOW_DIFFERENCES:
+        assert old in expected, old
+        expected = expected.replace(old, new)
+    assert template == expected
+    assert "tests" not in yaml.safe_load(template)["jobs"]
