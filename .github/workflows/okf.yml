@@ -43,7 +43,16 @@ jobs:
       - name: Install okf
         run: |
           pip install .
-          if [ -n "$BASE_REF" ]; then echo "OKF_BASE_ARGS=--base origin/$BASE_REF" >> "$GITHUB_ENV"; fi
+          if [ -n "$BASE_REF" ]; then
+            echo "OKF_BASE_ARGS=--base origin/$BASE_REF" >> "$GITHUB_ENV"
+            echo "OKF_SINCE_ARGS=--since origin/$BASE_REF" >> "$GITHUB_ENV"
+          fi
+
+      - name: okf trust
+        run: |  # in a PR: the sections this change makes to recheck; on push: the whole map
+          okf trust "$OKF_REPO" $OKF_SINCE_ARGS --format github 2> /dev/null
+          okf trust "$OKF_REPO" $OKF_SINCE_ARGS > trust.txt 2> trust-summary.txt
+          cat trust-summary.txt trust.txt
 
       - name: okf agents-check
         id: agents_check
@@ -75,7 +84,7 @@ jobs:
           AGENTS_EXIT: ${{ steps.agents_check.outputs.exit }}
           VALIDATE_EXIT: ${{ steps.validate.outputs.exit }}
         run: |
-          for name in agents-check validate stale; do touch "$name.txt" "$name-summary.txt"; done
+          for name in trust agents-check validate stale; do touch "$name.txt" "$name-summary.txt"; done
           section() {  # title, output file, summary file
             echo "### $1"
             echo
@@ -93,6 +102,8 @@ jobs:
             echo "<!-- okf-ai-report -->"
             echo "## okf-ai: agent instructions \`$OKF_REPO\`, knowledge \`$OKF_BUNDLE\`"
             echo
+            if [ -n "$BASE_REF" ]; then trust_title="okf trust: what this PR makes to recheck"; else trust_title="okf trust: trust map"; fi
+            section "$(title "$trust_title" 0 trust.txt)" trust.txt trust-summary.txt
             section "$(title "okf agents-check: instructions for AI agents" "$AGENTS_EXIT" agents-check.txt)" agents-check.txt agents-check-summary.txt
             section "$(title "okf validate: OKF v0.2 knowledge" "$VALIDATE_EXIT" validate.txt)" validate.txt validate-summary.txt
             section "$(title "okf stale: documents that may be outdated" 0 stale.txt)" stale.txt stale-summary.txt

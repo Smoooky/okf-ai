@@ -27,6 +27,11 @@ _Loader.yaml_implicit_resolvers = {
 }
 
 
+def load_yaml(text: str):
+    """YAML with dates kept as strings, as everywhere in okf."""
+    return yaml.load(text, Loader=_Loader)
+
+
 @dataclass
 class Document:
     path: Path  # absolute

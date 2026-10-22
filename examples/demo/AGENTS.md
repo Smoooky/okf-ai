@@ -14,15 +14,19 @@ make migrate              # применить схему БД
 ./scripts/seed_db.sh      # тестовые данные
 ```
 
-## Где что лежит
+## Auth
 
-- `src/auth.py` — вход по SMS и JWT-токены.
-- `src/billing.py` — тарифы, холд и списания.
-- `src/rides.py` — обработчик `POST /rides`.
-- `src/config.py` — настройки из переменных окружения.
-- Схема БД — [src/schema.sql](src/schema.sql).
+- Вход по SMS и JWT-токены — `src/auth.py`.
+- Секрет подписи — `WHEELO_JWT_SECRET`, его читает `src/config.py`.
+- Refresh-токен живёт 30 дней; после 5 неверных кодов номер блокируется на 15 минут.
+
+## Billing
+
+- Тарифы, холд и списания — `src/billing.py`: 50 ₽ за разблокировку и 8 ₽ в минуту.
+- Тарифы меняй только вместе с `tests/test_billing.py`.
+- Старт поездки — `src/rides.py`, схема БД — [src/schema.sql](src/schema.sql).
 
 ## Правила
 
 - Перед коммитом запускай `npm run lint` и `npm test`.
-- Тарифы в `src/billing.py` меняй только вместе с `tests/test_billing.py`.
+- Секреты не коммить: только переменные окружения.

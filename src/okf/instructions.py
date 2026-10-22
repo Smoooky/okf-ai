@@ -25,7 +25,7 @@ from okf.git import Change
 from okf.report import ERROR, INFO, WARNING, Issue
 
 SKIP_DIRS = {".git", "node_modules", "__pycache__", "venv", ".venv", "dist", "build", ".tox", ".pytest_cache", ".mypy_cache"}
-VISIBLE_DOT_DIRS = {".cursor", ".github"}  # hidden directories that hold agent rules
+VISIBLE_DOT_DIRS = {".cursor", ".github", ".ruler"}  # hidden directories that hold agent rules
 
 SHELL_LANGS = {"", "bash", "sh", "shell", "zsh", "fish", "console", "terminal", "shell-session", "shellsession"}
 RUNNERS = {
@@ -51,7 +51,7 @@ LOCKFILES = (("pnpm-lock.yaml", "pnpm"), ("yarn.lock", "yarn"), ("bun.lockb", "b
 JS_RUNNERS = ("npm", "pnpm", "yarn", "bun")
 _DOCUMENT_SUFFIXES = {".md", ".mdx", ".markdown", ".txt", ".rst"}
 
-_FENCE_RE = re.compile(r"^\s{0,3}(`{3,}|~{3,})\s*([\w+-]*)")
+FENCE_INFO_RE = re.compile(r"^\s{0,3}(`{3,}|~{3,})\s*([\w+-]*)")
 _PATH_RE = re.compile(r"^(?:\.{1,2}/)?[\w@.\-*]+(?:/[\w@.\-*]*)*$")
 _DOMAIN_RE = re.compile(r"^[\w-]+(?:\.[\w-]+)*\.(?:com|org|net|io|dev|ai|app|co|me|ru|sh|so|gg|xyz|cloud|tech)$", re.I)
 _EXT_RE = re.compile(r"\.[A-Za-z][A-Za-z0-9]{0,7}$")
@@ -120,17 +120,20 @@ def discover(root: Path) -> list[InstructionFile]:
         )
         for name in sorted(filenames):
             path = Path(dirpath) / name
-            scope = _scope(path, root)
+            scope = instruction_scope(path, root)
             if scope is not None:
                 found.append(InstructionFile(path, scope))
     return found
 
 
-def _scope(path: Path, root: Path) -> Path | None:
+def instruction_scope(path: Path, root: Path) -> Path | None:
     if path.name in ("AGENTS.md", "CLAUDE.md", ".cursorrules"):
         return path.parent
     if path.name == "copilot-instructions.md" and path.parent.name == ".github":
         return path.parent.parent
+    if path.suffix == ".md" and ".ruler" in path.relative_to(root).parts:  # Ruler keeps rules in .ruler/
+        parts = path.relative_to(root).parts
+        return root.joinpath(*parts[: parts.index(".ruler")])
     parts = path.relative_to(root).parts
     if path.suffix == ".mdc" and ".cursor" in parts:
         i = parts.index(".cursor")
@@ -149,13 +152,13 @@ def mentions(text: str, claude: bool = False) -> list[Mention]:
     markdown links, CLAUDE.md `@imports` and bare prose words that look like paths.
     """
     lines = text.split("\n")
-    first = _front_matter_end(lines)
+    first = front_matter_end(lines)
     found: list[Mention] = []
     fence, shell = None, False
     for number, line in enumerate(lines, 1):
         if number <= first:
             continue
-        match = _FENCE_RE.match(line)
+        match = FENCE_INFO_RE.match(line)
         if fence is not None:
             if match and match.group(1)[0] == fence[0] and len(match.group(1)) >= len(fence) and not match.group(2):
                 fence = None
@@ -180,7 +183,7 @@ def cursor_globs(text: str) -> list[tuple[str, int]]:
     """`globs:` patterns from a Cursor .mdc front matter (read by hand: `**/*.ts` is not valid YAML)."""
     lines = text.split("\n")
     result = []
-    for number in range(1, _front_matter_end(lines)):
+    for number in range(1, front_matter_end(lines)):
         match = re.match(r"^globs\s*:\s*(.*)$", lines[number])
         if match:
             value = match.group(1).strip().strip("[]")
@@ -251,7 +254,7 @@ def _strip_prompt(line: str) -> str:
     return "" if text.startswith("#") else text
 
 
-def _front_matter_end(lines: list[str]) -> int:
+def front_matter_end(lines: list[str]) -> int:
     """1-based line number of the closing `---`, 0 without front matter."""
     if not lines or lines[0].strip() != "---":
         return 0
@@ -442,7 +445,7 @@ def _script_argument(head: str, args: list[str], cwd: Path) -> list[Target]:
 # --- Checking -----------------------------------------------------------------------
 
 
-class _Repository:
+class Repository:
     """Lookups with caching: nearest package.json, Makefile, justfile."""
 
     def __init__(self, root: Path):
@@ -516,7 +519,7 @@ def check_repository(root: Path, strict: bool = False, changes: list[Change] | N
     """Check every instruction file under `root`. `changes` paths are relative to `git_root`."""
     root = root.resolve()
     git_root = (git_root or root).resolve()
-    repository = _Repository(root)
+    repository = Repository(root)
     files = discover(root)
     issues: list[Issue] = []
     facts: dict[Path, _Facts] = {}
@@ -533,51 +536,78 @@ def check_repository(root: Path, strict: bool = False, changes: list[Change] | N
     return Report(issues, len(files), paths, commands)
 
 
-def _check_file(instruction: InstructionFile, repository: _Repository, strict: bool,
-                changes: list[Change] | None, git_root: Path) -> tuple[list[Issue], _Facts, tuple[int, int]]:
-    issues: list[Issue] = []
+@dataclass(frozen=True)
+class Reference:
+    """One thing an instruction relies on, resolved against the repository."""
+
+    line: int
+    field: str  # "path", "command" or "globs"
+    subject: str  # how messages name it: '"src/a.py"', '"pytest tests/a.py": tests/a.py'
+    path: str | None = None  # a file or directory as written; None for scripts, targets and globs
+    candidates: tuple[Path, ...] = ()  # where that file may be
+    problem: str | None = None  # why a script, target or glob is missing
+    sources: tuple[Path, ...] = ()  # existing files (or glob patterns) it relies on: the code it describes
+
+    @property
+    def missing(self) -> str | None:
+        """Why the reference is broken, or None."""
+        if self.problem:
+            return self.problem
+        if self.path is not None and not any(c.exists() for c in self.candidates):
+            return f"{self.subject} does not exist"
+        return None
+
+
+@dataclass
+class FileReferences:
+    references: list[Reference]
+    facts: _Facts
+    paths: int = 0
+    commands: int = 0
+    error: str | None = None
+
+
+def references(instruction: InstructionFile, repository: Repository, text: str | None = None) -> FileReferences:
+    """Every path, command and glob an instruction file mentions, resolved."""
     facts = _Facts()
-    try:
-        text = instruction.path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError) as exc:
-        return [Issue(ERROR, instruction.path, "file", f"Cannot read file as UTF-8 text: {exc}")], facts, (0, 0)
-    problem = ERROR if strict else WARNING
-
-    def report(level: str, kind: str, message: str, line: int) -> None:
-        issues.append(Issue(level, instruction.path, kind, f"{message} (line {line})", line))
-
-    changed = {} if changes is None else _index_changes(changes)
-    instruction_changed = _relative(instruction.path, git_root) in changed
-    found = mentions(text, claude=instruction.name == "CLAUDE.md")
-    counts = [0, 0]
-    for mention in found:
+    if text is None:
+        try:
+            text = instruction.path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            return FileReferences([], facts, error=f"Cannot read file as UTF-8 text: {exc}")
+    found: list[Reference] = []
+    paths = commands = 0
+    for mention in mentions(text, claude=instruction.name == "CLAUDE.md"):
         if mention.kind == "path":
             candidates = _path_candidates(mention.text, instruction, repository.root)
             if mention.loose and not _first_segment_exists(mention.text, candidates):
                 continue
-            counts[0] += 1
+            paths += 1
+            subject = f'"{mention.text}"'
             if "*" in mention.text:
-                if not any(glob.glob(str(c), recursive=True) for c in candidates):
-                    report(problem, "path", f'"{mention.text}" matches no files', mention.line)
+                matching = [c for c in candidates if glob.glob(str(c), recursive=True)]
+                found.append(Reference(mention.line, "path", subject, sources=tuple(matching[:1]),
+                                       problem=None if matching else f"{subject} matches no files"))
                 continue
             facts.paths.append((_relative(_pick(candidates), repository.root), mention.text, mention.line))
-            _check_reference(f'"{mention.text}"', mention.text, candidates, mention.line, "path", instruction,
-                             changed, instruction_changed, git_root, problem, report)
+            found.append(Reference(mention.line, "path", subject, mention.text, tuple(candidates),
+                                   sources=tuple(c for c in candidates if c.exists())[:1]))
             continue
-        counts[1] += 1
+        commands += 1
         cwd = instruction.scope
         for words in split_commands(mention.text):
             command = " ".join(words)
             targets, cwd = analyze(words, cwd)
             for target in targets:
                 if target.kind == "file":
-                    candidates = [target.cwd / target.name, repository.root / target.name]
-                    _check_reference(f'"{command}"', target.name, candidates, mention.line, "command", instruction,
-                                     changed, instruction_changed, git_root, problem, report)
+                    candidates = (target.cwd / target.name, repository.root / target.name)
+                    subject = f'"{command}"' if command == target.name else f'"{command}": {target.name}'
+                    found.append(Reference(mention.line, "command", subject, target.name, candidates,
+                                           sources=tuple(c for c in candidates if c.exists())[:1]))
                     continue
-                message = _check_target(target, command, repository)
-                if message:
-                    report(problem, "command", message, mention.line)
+                message, manifest = _check_target(target, command, repository)
+                found.append(Reference(mention.line, "command", f'"{command}"', problem=message,
+                                       sources=(manifest,) if manifest else ()))
                 if target.kind == "script":
                     facts.managers.add(target.runner)
                     family = "script"
@@ -587,19 +617,41 @@ def _check_file(instruction: InstructionFile, repository: _Repository, strict: b
                 facts.commands.append((purpose, f"{family}:{target.name}", command, mention.line))
     if instruction.path.suffix == ".mdc":
         for pattern, line in cursor_globs(text):
-            if not glob.glob(pattern, root_dir=instruction.scope, recursive=True):
-                report(problem, "globs", f'"{pattern}" matches no files', line)
-    return issues, facts, (counts[0], counts[1])
+            matches = glob.glob(pattern, root_dir=instruction.scope, recursive=True)
+            found.append(Reference(line, "globs", f'"{pattern}"',
+                                   sources=(instruction.scope / pattern,) if matches else (),
+                                   problem=None if matches else f'"{pattern}" matches no files'))
+    return FileReferences(found, facts, paths, commands)
 
 
-def _check_reference(subject: str, path: str, candidates: list[Path], line: int, kind: str,
-                     instruction: InstructionFile, changed: dict[str, Change], instruction_changed: bool,
-                     git_root: Path, problem: str, report) -> None:
+def _check_file(instruction: InstructionFile, repository: Repository, strict: bool,
+                changes: list[Change] | None, git_root: Path) -> tuple[list[Issue], _Facts, tuple[int, int]]:
+    found = references(instruction, repository)
+    if found.error:
+        return [Issue(ERROR, instruction.path, "file", found.error)], found.facts, (0, 0)
+    issues: list[Issue] = []
+    problem = ERROR if strict else WARNING
+
+    def report(level: str, kind: str, message: str, line: int) -> None:
+        issues.append(Issue(level, instruction.path, kind, f"{message} (line {line})", line))
+
+    changed = {} if changes is None else _index_changes(changes)
+    instruction_changed = _relative(instruction.path, git_root) in changed
+    for reference in found.references:
+        if reference.path is not None:
+            _check_reference(reference, instruction, changed, instruction_changed, git_root, problem, report)
+        elif reference.problem:
+            report(problem, reference.field, reference.problem, reference.line)
+    return issues, found.facts, (found.paths, found.commands)
+
+
+def _check_reference(reference: Reference, instruction: InstructionFile, changed: dict[str, Change],
+                     instruction_changed: bool, git_root: Path, problem: str, report) -> None:
     """A file or directory an instruction relies on: does it exist, did the change touch it?"""
-    shown = subject if subject.strip('"') == path else f"{subject}: {path}"
-    relatives = {_relative(c, git_root) for c in candidates}
+    shown, line, kind = reference.subject, reference.line, reference.field
+    relatives = {_relative(c, git_root) for c in reference.candidates}
     hits = [changed[r] for r in relatives if r in changed]
-    if not any(c.exists() for c in candidates):
+    if reference.missing:
         renamed = next((c for c in hits if c.status in "RC" and c.old_path in relatives), None)
         if renamed is not None:
             new = Path(os.path.relpath(git_root / renamed.path, instruction.scope)).as_posix()
@@ -607,50 +659,50 @@ def _check_reference(subject: str, path: str, candidates: list[Path], line: int,
         elif hits:
             report(problem, kind, f"{shown} was deleted or renamed in this change", line)
         else:
-            report(problem, kind, f"{shown} does not exist", line)
+            report(problem, kind, reference.missing, line)
         return
     touched = [c for c in hits if c.status != "D" and c.path in relatives]
-    if touched and Path(path).suffix.lower() not in _DOCUMENT_SUFFIXES:  # editing a linked doc is routine
+    if touched and Path(reference.path).suffix.lower() not in _DOCUMENT_SUFFIXES:  # editing a linked doc is routine
         if instruction_changed:
             report(INFO, kind, f"{shown} changed; the instruction was updated in the same change", line)
         else:
             report(WARNING, kind, f"{shown} changed in this change; the instruction may be outdated", line)
 
 
-def _check_target(target: Target, command: str, repository: _Repository) -> str | None:
-    """Why the script, make target or just recipe a command needs is missing, if it is."""
+def _check_target(target: Target, command: str, repository: Repository) -> tuple[str | None, Path | None]:
+    """Why the script, make target or just recipe a command needs is missing, and the file defining it."""
     if target.kind == "script":
         package = repository.nearest(target.cwd, ("package.json",))
         if package is None:
-            return f'"{command}": no package.json found'
+            return f'"{command}": no package.json found', None
         data = repository.package(package)
         if data is None:
-            return f'"{command}": {repository.show(package)} is not valid JSON'
+            return f'"{command}": {repository.show(package)} is not valid JSON', package
         manager = _package_manager(package.parent, data)
         if manager and manager[0] != target.runner:
-            return f'"{command}": this project uses {manager[0]} ({manager[1]})'
+            return f'"{command}": this project uses {manager[0]} ({manager[1]})', package
         scripts = data.get("scripts") if isinstance(data.get("scripts"), dict) else {}
         dependencies = {**(data.get("dependencies") or {}), **(data.get("devDependencies") or {})}
         if target.name in scripts or (target.shorthand and target.name in dependencies):
-            return None
+            return None, package
         if target.name == "start" and (package.parent / "server.js").exists():
-            return None
-        return f'"{command}": no script "{target.name}" in {repository.show(package)}'
+            return None, package
+        return f'"{command}": no script "{target.name}" in {repository.show(package)}', package
     if target.kind == "make":
         makefile = target.makefile or repository.nearest(target.cwd, ("GNUmakefile", "makefile", "Makefile"))
         if makefile is None or not makefile.is_file():
-            return f'"{command}": no Makefile found'
+            return f'"{command}": no Makefile found', None
         targets, open_ended = repository.make_targets(makefile)
         if target.name in targets or open_ended:
-            return None
-        return f'"{command}": no target "{target.name}" in {repository.show(makefile)}'
+            return None, makefile
+        return f'"{command}": no target "{target.name}" in {repository.show(makefile)}', makefile
     justfile = repository.nearest(target.cwd, ("justfile", "Justfile", ".justfile"))
     if justfile is None:
-        return f'"{command}": no justfile found'
+        return f'"{command}": no justfile found', None
     recipes, open_ended = repository.just_recipes(justfile)
     if target.name in recipes or open_ended:
-        return None
-    return f'"{command}": no recipe "{target.name}" in {repository.show(justfile)}'
+        return None, justfile
+    return f'"{command}": no recipe "{target.name}" in {repository.show(justfile)}', justfile
 
 
 def _package_manager(directory: Path, data: dict) -> tuple[str, str] | None:

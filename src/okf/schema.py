@@ -103,6 +103,11 @@ def latest_verification(doc: Document) -> tuple[datetime, str] | None:
     return latest
 
 
+def is_actor(value: object) -> bool:
+    """§7: human:<id>, process:<id> or <producer>/<version>."""
+    return isinstance(value, str) and bool(_ACTOR_RE.match(value.strip()))
+
+
 def is_human(actor: object) -> bool:
     return isinstance(actor, str) and actor.strip().startswith(HUMAN_PREFIX)
 

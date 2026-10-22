@@ -1,8 +1,9 @@
-"""Command line: okf agents-check | validate | agents | stale."""
+"""Command line: okf trust | verify | agents-check | stale | validate | agents."""
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,10 +12,11 @@ from okf import __version__
 from okf.agents import render_agents
 from okf.bundle import Bundle
 from okf.report import ERROR, INFO, WARNING, Issue, display_path, format_issue
-from okf.git import Change, GitError, changed_paths, changes_since, toplevel
+from okf.git import Change, GitError, History, changed_paths, changes_since, toplevel
 from okf.instructions import check_repository
 from okf.schema import get_profile
 from okf.stale import find_stale, normalize_repo_path
+from okf.trust import TrustError, Unit, build_map, default_actor, verify, verify_units
 from okf.validate import has_errors, validate_bundle
 from okf.values import parse_now
 
@@ -24,11 +26,13 @@ def main(argv: list[str] | None = None) -> int:
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="replace")
     args = _parser().parse_args(argv)
-    if args.command == "agents-check":
+    if args.command == "verify":
+        return _verify(args)
+    if args.command in ("agents-check", "trust"):
         if not Path(args.repo).is_dir():
             print(f"okf: error: directory not found: {args.repo}", file=sys.stderr)
             return 2
-        return _agents_check(args)
+        return _agents_check(args) if args.command == "agents-check" else _trust(args)
     bundle_dir = Path(args.bundle)
     if not bundle_dir.is_dir():
         print(f"okf: error: bundle directory not found: {args.bundle}", file=sys.stderr)
@@ -38,10 +42,31 @@ def main(argv: list[str] | None = None) -> int:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="okf", description="Keep instructions for AI agents and OKF v0.2 knowledge in step with the code."
+        prog="okf",
+        description="Shows which instructions and knowledge for AI agents can be trusted right now.",
     )
     parser.add_argument("--version", action="version", version=f"okf {__version__}")
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
+
+    trust = commands.add_parser("trust", help="trust map: what agents can rely on, what to recheck, what is broken")
+    trust.add_argument("repo", nargs="?", default=".", help="repository or directory (default: .)")
+    trust.add_argument("--since", "--base", dest="since", metavar="REF",
+                       help="show only what a change since REF (e.g. origin/main) makes to recheck")
+    trust.add_argument("--bundle", action="append", default=[], metavar="DIR",
+                       help="OKF bundle to include (default: every .md with a type in its front matter)")
+    trust.add_argument("--strict", action="store_true", help="exit 1 if anything is broken or to recheck")
+    trust.add_argument("--json", action="store_true", help="print the map as JSON")
+    _add_now(trust)
+    _add_format(trust)
+
+    verify_parser = commands.add_parser("verify", help="confirm that an instruction section or OKF document is true")
+    verify_parser.add_argument("units", nargs="*", metavar="FILE[#SECTION]",
+                               help="e.g. AGENTS.md#Auth (a whole file: every section), knowledge/auth_flow.md")
+    verify_parser.add_argument("--by", metavar="ACTOR", help="who confirms (default: human:<git user.email>)")
+    verify_parser.add_argument("--at", type=parse_now, metavar="DATETIME", help="when (default: now)")
+    verify_parser.add_argument("--all-current", action="store_true",
+                               help="confirm every not yet verified instruction section whose code did not change")
+    verify_parser.add_argument("--repo", default=".", help="where --all-current looks (default: .)")
 
     check = commands.add_parser(
         "agents-check", help="check AGENTS.md, CLAUDE.md, Cursor and Copilot rules against the code"
@@ -132,6 +157,110 @@ def _agents_check(args: argparse.Namespace) -> int:
         file=sys.stderr,
     )
     return 1 if errors else 0
+
+
+_TRUST_LABELS = {"broken": ERROR, "recheck": WARNING, "human-verified": "OK", "process-verified": "OK",
+                 "unverified": INFO}
+
+
+def _trust(args: argparse.Namespace) -> int:
+    root = Path(args.repo).resolve()
+    git_root = toplevel(root)
+    now = _now(args)
+    changes = None
+    if args.since:
+        if git_root is None:
+            print("okf: error: --since needs a git repository", file=sys.stderr)
+            return 2
+        try:
+            changes = changes_since(git_root, args.since)
+        except GitError as exc:
+            print(f"okf: error: {exc}", file=sys.stderr)
+            return 2
+    trust_map = build_map(root, History(git_root, now), changes, [Path(b) for b in args.bundle] or None, now)
+    shown = [u for u in trust_map.units if u.in_change] if changes is not None else trust_map.units
+    if args.json:
+        data = {"summary": _trust_summary(trust_map), "units": [_unit_json(u, root) for u in shown]}
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+    else:
+        print(trust_map.summary(), file=sys.stderr)
+        sys.stderr.flush()
+        for unit in shown:
+            label = _TRUST_LABELS[unit.level]
+            if args.format == "github":
+                if label in (ERROR, WARNING):
+                    message = f"{unit.section}: {unit.message}" if unit.section else unit.message
+                    print(format_issue(Issue(label, unit.path, "trust", message, unit.line), "github"))
+                continue
+            name = display_path(unit.path) + (f"#{unit.section}" if unit.section else "")
+            print(f"[{label}] {name}: trust: {unit.message}")
+        sys.stdout.flush()
+    return 1 if args.strict and any(u.level in ("broken", "recheck") for u in shown) else 0
+
+
+def _trust_summary(trust_map) -> dict:
+    return {
+        "units": len(trust_map.units),
+        "verified": trust_map.count("human-verified", "process-verified"),
+        "recheck": trust_map.count("recheck"),
+        "broken": trust_map.count("broken"),
+        "unverified": trust_map.count("unverified"),
+        "in_change": sum(bool(u.in_change) for u in trust_map.units) if trust_map.since else None,
+    }
+
+
+def _unit_json(unit: Unit, root: Path) -> dict:
+    def stamp(moment):
+        return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if moment else None
+
+    def relative(path):
+        path = Path(path)
+        return path.relative_to(root).as_posix() if path.is_relative_to(root) else path.as_posix()
+
+    return {
+        "unit": unit.name,
+        "file": relative(unit.path),
+        "section": unit.section,
+        "line": unit.line,
+        "kind": unit.kind,
+        "level": unit.level,
+        "message": unit.message,
+        "sources": [relative(s) for s in unit.sources],
+        "changed": [{"path": path, "at": stamp(at)} for path, at in unit.changed],
+        "in_change": unit.in_change,
+        "broken": unit.broken,
+        "verified": [{"by": by, "at": stamp(at)} for at, by in sorted(unit.verifications)],
+        "last_edited": stamp(unit.last_edited),
+    }
+
+
+def _verify(args: argparse.Namespace) -> int:
+    cwd = Path.cwd()
+    at = args.at or datetime.now(timezone.utc)
+    if not args.units and not args.all_current:
+        print("okf: error: name what to verify (FILE[#SECTION]) or pass --all-current", file=sys.stderr)
+        return 2
+    try:
+        by = args.by or default_actor(cwd)
+        names = []
+        for target in args.units:
+            folder = (cwd / target.partition("#")[0]).resolve().parent
+            names.extend(verify(target, by, at, cwd, toplevel(folder) if folder.is_dir() else None))
+        if args.all_current:
+            root = Path(args.repo).resolve()
+            git_root = toplevel(root)
+            trust_map = build_map(root, History(git_root), None, None)
+            current = [u for u in trust_map.units if u.kind == "instruction" and u.level == "unverified"]
+            names.extend(verify_units(current, by, at, cwd, git_root))
+    except TrustError as exc:
+        print(f"okf: error: {exc}", file=sys.stderr)
+        return 2
+    stamp = at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    for name in names:
+        print(f"okf verify: {name} verified by {by} at {stamp}", file=sys.stderr)
+    if not names:
+        print("okf verify: nothing to verify", file=sys.stderr)
+    return 0
 
 
 def _validate(args: argparse.Namespace, bundle: Bundle) -> int:

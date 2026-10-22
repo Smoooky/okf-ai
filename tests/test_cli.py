@@ -251,7 +251,7 @@ def test_agents_check_with_changed_files(capsys, monkeypatch):
                     "--repo-root", ".")
     assert [line for line in out if line not in DEMO_INSTRUCTIONS] == [
         '[WARNING] examples/demo/AGENTS.md: path: "src/config.py" changed in this change; '
-        "the instruction may be outdated (line 22)",
+        "the instruction may be outdated (line 20)",
         '[WARNING] examples/demo/CLAUDE.md: path: "src/config.py" changed in this change; '
         "the instruction may be outdated (line 8)",
     ]
