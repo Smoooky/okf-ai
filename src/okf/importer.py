@@ -134,11 +134,16 @@ def _recorded(meta: dict, page_id: str) -> str | None:
     return None
 
 
+def slug(title: str) -> str:
+    """An ASCII file name stem: "Тарифы и биллинг" -> "tarify_i_billing"."""
+    text = "".join(_CYRILLIC.get(ch, ch) for ch in title.lower())
+    return re.sub(r"[^a-z0-9]+", "_", text).strip("_")[:60].strip("_")
+
+
 def _file_name(page: Page, taken: set[str]) -> str:
-    text = "".join(_CYRILLIC.get(ch, ch) for ch in page.title.lower())
-    slug = re.sub(r"[^a-z0-9]+", "_", text).strip("_")[:60].strip("_") or f"page_{page.id}"
-    name = f"{slug}.md"
-    return name if name not in taken and name not in ("index.md", "log.md", "agents.md") else f"{slug}_{page.id}.md"
+    slug_text = slug(page.title) or f"page_{page.id}"
+    name = f"{slug_text}.md"
+    return name if name not in taken and name not in ("index.md", "log.md", "agents.md") else f"{slug_text}_{page.id}.md"
 
 
 def _index(out: Path, new: list[Imported]) -> None:

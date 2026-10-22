@@ -7,6 +7,7 @@
 без разметки и настройки, показывает карту доверия: что подтверждено после последнего изменения кода,
 что перепроверить и где ссылки ведут в никуда.
 
+- `okf init` — каркас: бандл знаний, `.okf/trust.yml`, workflow и подсказка в `AGENTS.md`;
 - `okf trust` — карта доверия по разделам инструкций и файлам базы знаний; `okf verify` — подтвердить раздел в одно действие;
   `okf trust --html report.html` — та же карта страницей для людей, `okf view` — сайт базы знаний с графом связей;
 - `okf fix` — правки: механические без ИИ (переехавший файл, переименованный скрипт) и черновики от LLM для разделов,
@@ -60,6 +61,34 @@ python -m pytest
 ```
 
 `--format github` печатает то же как команды GitHub Actions — они становятся аннотациями в PR.
+
+## `okf init [repo] [--from-agents] [--force]`
+
+Каркас из брифа одной командой:
+
+```text
+okf init: created knowledge/architecture.md
+okf init: created knowledge/local_setup.md
+okf init: created knowledge/runbook.md
+okf init: created knowledge/index.md
+okf init: created knowledge/log.md
+okf init: created .okf/trust.yml
+okf init: created .github/workflows/okf.yml
+okf init: created knowledge/AGENTS.md
+okf init: updated AGENTS.md
+```
+
+- `knowledge/` — бандл OKF: `index.md`, `log.md`, три шаблона (Architecture, Guide, Runbook) с правильной шапкой,
+  `status: draft` и `generated: {by: process:okf-init}`, и роутер `knowledge/AGENTS.md`;
+- `.okf/trust.yml` — куда `okf verify` пишет подтверждения;
+- `.github/workflows/okf.yml` — проверка на каждый PR (как в этом репозитории, okf ставится из git);
+- в существующий `AGENTS.md` дописывается раздел «Knowledge base» со ссылкой на роутер (один раз).
+
+Существующие файлы не перезаписываются без `--force`: okf печатает `kept … (it exists; --force overwrites it)`.
+`--from-agents` дополнительно предлагает документ знаний на каждый раздел корневых `AGENTS.md` и `CLAUDE.md`:
+текст раздела, `sources` — пути из его текста, ссылки переписаны относительно `knowledge/`, тип угадывается по
+заголовку (Architecture, Runbook, API Endpoint, Policy, иначе Guide). Всё созданное — черновики: в карте доверия
+они «не подтверждены», пока человек не прочитает и не сделает `okf verify knowledge/<файл>`.
 
 ## `okf trust [repo] [--since REF] [--strict] [--json]`
 
@@ -636,7 +665,7 @@ okf validate examples/demo/knowledge --strict && okf agents examples/demo/knowle
 
 ```text
 src/okf/        trust.py (карта доверия, verify), fix.py (правки и черновики), scan.py (проба), instructions.py (agents-check), schema.py (поля и правила OKF,
-                профили okf и strict), importer.py (okf import), view.py (report.html, okf view), validate.py, stale.py,
+                профили okf и strict), importer.py (okf import), view.py (report.html, okf view), scaffold.py (okf init), validate.py, stale.py,
                 agents.py, bundle.py, git.py, cli.py
 src/okf/sources/ коннекторы: base.py (интерфейс Source), git.py, confluence.py, jira.py, http.py (запросы, фикстуры)
 tests/          pytest; fixtures/okf-official — официальный пример acme_retail (Apache-2.0)

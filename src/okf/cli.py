@@ -1,4 +1,4 @@
-"""Command line: okf trust | fix | verify | view | import | sources | agents-check | stale | validate | agents | scan."""
+"""Command line: okf init | trust | fix | verify | view | import | sources | agents-check | stale | validate | agents | scan."""
 
 from __future__ import annotations
 
@@ -19,6 +19,7 @@ from okf.fix import KEY_HELP, FixError, ReplayProvider, apply, plan_drafts, plan
 from okf.importer import import_confluence
 from okf.instructions import check_repository
 from okf.scan import ScanError, find_repos, parse_repos, scan, score
+from okf.scaffold import init as init_scaffold
 from okf.schema import get_profile
 from okf.sources import Unavailable, registry
 from okf.sources.base import day
@@ -50,6 +51,8 @@ def main(argv: list[str] | None = None) -> int:
         return _fix(args)
     if args.command == "view":
         return _view(args)
+    if args.command == "init":
+        return _init(args)
     if args.command in ("agents-check", "trust", "sources"):
         if not Path(args.repo).is_dir():
             print(f"okf: error: directory not found: {args.repo}", file=sys.stderr)
@@ -70,6 +73,13 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"okf {__version__}")
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
+
+    init_parser = commands.add_parser("init", help="set up okf-ai here: an OKF bundle, .okf/trust.yml, the workflow")
+    init_parser.add_argument("repo", nargs="?", default=".", help="repository (default: .)")
+    init_parser.add_argument("--force", action="store_true", help="overwrite files that already exist")
+    init_parser.add_argument("--from-agents", action="store_true",
+                             help="also propose a knowledge document for every section of AGENTS.md and CLAUDE.md")
+    _add_now(init_parser)
 
     trust = commands.add_parser("trust", help="trust map: what agents can rely on, what to recheck, what is broken")
     trust.add_argument("repo", nargs="?", default=".", help="repository or directory (default: .)")
@@ -399,6 +409,22 @@ def _verify(args: argparse.Namespace) -> int:
               "read each and confirm it with okf verify <unit>", file=sys.stderr)
     elif not names:
         print("okf verify: nothing to verify", file=sys.stderr)
+    return 0
+
+
+def _init(args: argparse.Namespace) -> int:
+    root = Path(args.repo)
+    if not root.is_dir():
+        print(f"okf: error: directory not found: {args.repo}", file=sys.stderr)
+        return 2
+    result = init_scaffold(root, _now(args), args.force, args.from_agents)
+    for path in result.created:
+        print(f"okf init: created {display_path(path)}", file=sys.stderr)
+    for path in result.updated:
+        print(f"okf init: updated {display_path(path)}", file=sys.stderr)
+    for path in result.kept:
+        print(f"okf init: kept {display_path(path)} (it exists; --force overwrites it)", file=sys.stderr)
+    print("okf init: next: fill in knowledge/, then okf trust and okf verify <file>", file=sys.stderr)
     return 0
 
 
