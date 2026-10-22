@@ -1,8 +1,11 @@
 import copy
 import json
+import os
+import subprocess
 import threading
 import urllib.request
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -147,3 +150,88 @@ def mock():
     yield start
     for server in servers:
         server.close()
+
+
+# --- A throwaway git repository with commits at chosen dates, and the moment tests evaluate at ---
+
+NOW = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
+
+
+def at(text):
+    return datetime.fromisoformat(text.replace("Z", "+00:00"))
+
+
+class Repo:
+    """A git repository in a temporary folder: write files, commit them at a date, map them."""
+
+    def __init__(self, root: Path):
+        self.root = root
+        root.mkdir(parents=True, exist_ok=True)
+        self.git("init", "-q", "-b", "main")
+
+    def git(self, *args, when=None):
+        env = {**os.environ, **({"GIT_AUTHOR_DATE": when, "GIT_COMMITTER_DATE": when} if when else {})}
+        result = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
+                                cwd=self.root, check=True, capture_output=True, text=True, env=env)
+        return result.stdout
+
+    def write(self, files):
+        for rel, text in files.items():
+            path = self.root / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+        return self
+
+    def commit(self, when, message="change"):
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", message, when=when)
+        return self
+
+    def read(self, rel):
+        return (self.root / rel).read_text(encoding="utf-8")
+
+    def map(self, changes=None, now=NOW, **kwargs):
+        from okf.git import History
+        from okf.trust import build_map
+
+        return build_map(self.root, History(self.root, now), changes, now=now, **kwargs)
+
+    def units(self, now=NOW, **kwargs):
+        return {u.name: u for u in self.map(now=now, **kwargs).units}
+
+    def levels(self, **kwargs):
+        return {unit.name: unit.level for unit in self.map(**kwargs).units}
+
+    def unit(self, name, **kwargs):
+        return next(u for u in self.map(**kwargs).units if u.name == name)
+
+    def verify(self, target, by="human:ivan", when="2026-09-05T10:00:00Z"):
+        from okf.trust import verify
+
+        return verify(target, by, at(when), self.root, self.root)
+
+    def plan(self, changes=None, only=None, provider=None, now=NOW, **draft_options):
+        """okf fix: the mechanical fixes, and drafts when a provider is given."""
+        from okf.fix import plan_drafts, plan_fixes
+        from okf.git import History
+        from okf.trust import build_map
+
+        history = History(self.root, now)
+        trust_map = build_map(self.root, history, changes, now=now)
+        plan = plan_fixes(self.root, history, trust_map, changes, only)
+        if provider:
+            plan_drafts(plan, trust_map, history, provider, only, **draft_options)
+        return plan
+
+    def check(self):
+        """okf agents-check: (level, file, field, message) per issue."""
+        from okf.instructions import check_repository
+
+        report = check_repository(self.root, False, None, self.root)
+        return [(i.level, i.path.relative_to(self.root.resolve()).as_posix(), i.field, i.message)
+                for i in report.issues]
+
+
+@pytest.fixture
+def repo(tmp_path):
+    return Repo(tmp_path / "repo")

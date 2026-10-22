@@ -1,10 +1,9 @@
 """`okf init`: the bundle, the sidecar, the workflow, the AGENTS.md hint; nothing overwritten."""
 
-from datetime import datetime, timezone
 
 import yaml
 
-from conftest import REPO_ROOT
+from conftest import NOW, REPO_ROOT
 from okf.bundle import Bundle
 from okf.cli import main
 from okf.git import History
@@ -15,7 +14,6 @@ from okf.sources import registry
 from okf.trust import build_map
 from okf.validate import validate_bundle
 
-NOW = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
 AGENTS = "# AGENTS.md\n\nIntro.\n\n## Auth\n\nLogin: `src/auth.py`, see [the schema](db/schema.sql).\n\n" \
          "## Архитектура\n\nTwo services.\n"
 

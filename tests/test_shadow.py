@@ -2,16 +2,14 @@
 
 import shutil
 import subprocess
-from datetime import datetime, timezone
 
 import pytest
 
-from conftest import REPO_ROOT
+from conftest import NOW, REPO_ROOT
 from okf.cli import main
 from okf.fix import FixError, Provider
 from okf.shadow import ANSWER_SCHEMA, OPEN_SCHEMA, Question, ShadowError, load_questions, run, worse
 
-NOW = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
 KB = REPO_ROOT / "examples" / "demo" / "knowledge"
 
 

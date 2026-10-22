@@ -4,13 +4,11 @@ from datetime import datetime, timezone
 
 import pytest
 
-from conftest import DELETE, OFFICIAL_BUNDLE, doc, meta
+from conftest import DELETE, doc, meta, NOW, OFFICIAL_BUNDLE, Repo
 from okf.bundle import Bundle
 from okf.git import changed_paths, changes_since
 from okf.report import WARNING
 from okf.stale import find_stale, resource_paths, source_matches
-
-NOW = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
 
 
 def stale(make_bundle, files, changed, now=NOW):
@@ -206,8 +204,6 @@ def test_git_changed_files_against_base(tmp_path):
 
 
 def glob_repo(tmp_path):
-    from test_trust import Repo
-
     repo = Repo(tmp_path / "repo")
     repo.write({"src/schema.sql": "create table rides();\n", "src/auth.py": "x = 1\n",
                 "kb/index.md": '---\nokf_version: "0.2"\n---\n# KB\n[t](tables.md)\n',
@@ -251,8 +247,6 @@ def test_remote_sources_are_compared_with_the_same_moment(tmp_path):
     from okf.git import History
     from okf.sources import registry
     from okf.trust import build_map
-    from test_trust import Repo
-
     env = {"OKF_SOURCES_FIXTURES": str(REPO_ROOT / "examples" / "atlassian-fixtures"),
            "OKF_CONFLUENCE_URL": "https://wheelo.atlassian.net/wiki"}
     repo = Repo(tmp_path / "repo")

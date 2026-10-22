@@ -4,60 +4,20 @@ import json
 import os
 import shutil
 import subprocess
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 import yaml
 
-from conftest import REPO_ROOT
+from conftest import NOW, REPO_ROOT
 from okf.cli import main
 from okf.git import History, changes_since, merge_base
-from okf.instructions import check_repository, discover, is_placeholder, mentions
+from okf.instructions import discover, is_placeholder, mentions
 from okf.trust import build_map
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
-NOW = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
 CODE = {"src/auth.py": "TTL = 30\n", "src/billing.py": "FEE = 50\n",
         "package.json": json.dumps({"scripts": {"test": "pytest"}})}
-
-
-class Repo:
-    def __init__(self, root: Path):
-        self.root = root
-        root.mkdir(parents=True, exist_ok=True)
-        self.git("init", "-q", "-b", "main")
-
-    def git(self, *args, when=None):
-        env = {**os.environ, **({"GIT_AUTHOR_DATE": when, "GIT_COMMITTER_DATE": when} if when else {})}
-        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args], cwd=self.root,
-                              check=True, capture_output=True, text=True, env=env).stdout
-
-    def write(self, files):
-        for rel, text in files.items():
-            path = self.root / rel
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text, encoding="utf-8")
-        return self
-
-    def commit(self, when, message="change"):
-        self.git("add", "-A")
-        self.git("commit", "-q", "-m", message, when=when)
-        return self
-
-    def units(self, **kwargs):
-        trust_map = build_map(self.root, History(self.root, NOW), now=NOW, **kwargs)
-        return {u.name: u for u in trust_map.units}
-
-    def check(self):
-        report = check_repository(self.root, False, None, self.root)
-        return [(i.level, i.path.relative_to(self.root.resolve()).as_posix(), i.field, i.message)
-                for i in report.issues]
-
-
-@pytest.fixture
-def repo(tmp_path):
-    return Repo(tmp_path / "repo")
 
 
 def links(unit):

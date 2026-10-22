@@ -5,14 +5,13 @@ from datetime import datetime, timezone
 
 import pytest
 
-from conftest import doc, meta
+from conftest import doc, meta, NOW
 from okf.git import History
 from okf.sources import registry
 from okf.sources.http import Http
 from okf.sources.slack import SlackSource, message_ref
 from okf.trust import build_map
 
-NOW = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
 TS = "1726000000.000100"  # 2024-09-10
 EDITED = "1729000000.000000"  # 2024-10-15T13:46:40Z
 

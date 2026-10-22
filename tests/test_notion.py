@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from conftest import doc, meta
+from conftest import doc, meta, NOW
 from okf.bundle import Bundle
 from okf.cli import main
 from okf.git import History
@@ -18,7 +18,6 @@ from okf.sources.notion import MIN_INTERVAL, SNAPSHOTS, NotionSource, page_id
 from okf.trust import build_map
 from okf.validate import validate_bundle
 
-NOW = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
 ROOT_ID = "1a2b3c4d5e6f40718293a4b5c6d7e8f9"
 CHILD_ID = "0f0e0d0c0b0a49384756a5b4c3d2e1f0"
 

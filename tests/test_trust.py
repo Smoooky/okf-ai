@@ -1,7 +1,6 @@
 """`okf trust` and `okf verify`: units, sources, dates from git, the sidecar, levels."""
 
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -10,66 +9,17 @@ from pathlib import Path
 
 import pytest
 
-from conftest import REPO_ROOT, doc, meta
+from conftest import doc, meta, NOW, REPO_ROOT
 from okf.bundle import load_document
 from okf.cli import main
 from okf.git import Change, History
 from okf.report import display_path as display
 from okf.schema import verifications
 from okf.trust import (
-    Sidecar, TrustError, build_map, default_actor, section_hash, sections, verify,
+    Sidecar, TrustError, build_map, default_actor, section_hash, sections,
 )
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
-NOW = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
-
-
-def at(text):
-    return datetime.fromisoformat(text.replace("Z", "+00:00"))
-
-
-class Repo:
-    """A throwaway git repository with commits at chosen dates."""
-
-    def __init__(self, root: Path):
-        self.root = root
-        root.mkdir(parents=True, exist_ok=True)
-        self.git("init", "-q", "-b", "main")
-
-    def git(self, *args, when=None):
-        env = {**os.environ, **({"GIT_AUTHOR_DATE": when, "GIT_COMMITTER_DATE": when} if when else {})}
-        result = subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args],
-                                cwd=self.root, check=True, capture_output=True, text=True, env=env)
-        return result.stdout
-
-    def write(self, files):
-        for rel, text in files.items():
-            path = self.root / rel
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text, encoding="utf-8")
-        return self
-
-    def commit(self, when, message="change"):
-        self.git("add", "-A")
-        self.git("commit", "-q", "-m", message, when=when)
-        return self
-
-    def map(self, changes=None, now=NOW):
-        return build_map(self.root, History(self.root, now), changes, now=now)
-
-    def levels(self, **kwargs):
-        return {unit.name: unit.level for unit in self.map(**kwargs).units}
-
-    def unit(self, name, **kwargs):
-        return next(u for u in self.map(**kwargs).units if u.name == name)
-
-    def verify(self, target, by="human:ivan", when="2026-09-05T10:00:00Z"):
-        return verify(target, by, at(when), self.root, self.root)
-
-
-@pytest.fixture
-def repo(tmp_path):
-    return Repo(tmp_path / "repo")
 
 
 AGENTS = """# AGENTS.md

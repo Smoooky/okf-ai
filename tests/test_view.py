@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from conftest import REPO_ROOT, doc, meta
+from conftest import doc, meta, NOW, Repo, REPO_ROOT
 from okf.bundle import Bundle
 from okf.cli import main
 from okf.git import History, web_base
@@ -15,7 +15,6 @@ from okf.sources import registry
 from okf.trust import build_map
 from okf.view import build_site, date_ru, find_bundles, freshness, markdown_html, plural, trust_html
 
-NOW = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
 DEMO = REPO_ROOT / "examples" / "demo"
 
 
@@ -84,7 +83,7 @@ def test_trust_html_is_one_offline_page(tmp_path):
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
 def test_timeline_shows_the_check_and_the_later_change(tmp_path):
-    from test_trust import AGENTS, Repo, code_repo
+    from test_trust import AGENTS, code_repo
 
     repo = Repo(tmp_path / "repo")
     code_repo(repo).write({"AGENTS.md": AGENTS}).commit("2026-09-01T10:00:00Z")

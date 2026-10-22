@@ -6,10 +6,11 @@ import subprocess
 
 import pytest
 
+from conftest import NOW
 from okf import pr as pr_module
 from okf.cli import main
 from okf.pr import PrError, describe, open_pr
-from test_fix import NOW, FakeModel, Repo, drifted_repo, moved_repo
+from test_fix import FakeModel, drifted_repo, moved_repo
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
 
@@ -27,11 +28,6 @@ class FakeGh:
         if args[:2] == ("pr", "create"):
             return "https://github.com/acme/wheelo/pull/7\n"
         return ""
-
-
-@pytest.fixture
-def repo(tmp_path):
-    return Repo(tmp_path / "repo")
 
 
 @pytest.fixture

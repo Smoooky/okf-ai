@@ -1,10 +1,7 @@
-from datetime import datetime, timezone
 
-from conftest import OFFICIAL_BUNDLE, doc, meta
+from conftest import doc, meta, NOW, OFFICIAL_BUNDLE
 from okf.agents import freshness_status, render_agents, trust
 from okf.bundle import Bundle
-
-NOW = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
 
 
 def render(make_bundle, files):
@@ -76,7 +73,6 @@ def test_title_falls_back_from_front_matter_to_heading_to_file_name(make_bundle)
     }
     text, _ = render(make_bundle, files)
     assert [row.split(" | ")[0] for row in rows(text)] == ["| From YAML", "| From heading", "| ride glossary"]
-
 
 
 def test_nested_paths_and_custom_output_location(make_bundle, tmp_path):

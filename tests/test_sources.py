@@ -1,10 +1,9 @@
 """Connectors (okf/sources): Confluence and Jira on mocked HTTP only, never the real Atlassian."""
 
-from datetime import datetime, timezone
 
 import pytest
 
-from conftest import REPO_ROOT, doc, meta
+from conftest import at, doc, meta, NOW, REPO_ROOT
 from okf.bundle import Bundle
 from okf.cli import main
 from okf.git import History
@@ -24,11 +23,6 @@ CLOUD = {"OKF_SOURCES_FIXTURES": str(FIXTURES), "OKF_CONFLUENCE_URL": "https://w
          "OKF_JIRA_URL": "https://wheelo.atlassian.net"}
 PAGE = "https://wheelo.atlassian.net/wiki/spaces/WHL/pages/131073/Metriki+produkta"
 EPIC = "https://wheelo.atlassian.net/browse/WHL-42"
-NOW = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
-
-
-def at(text):
-    return datetime.fromisoformat(text.replace("Z", "+00:00"))
 
 
 # --- Recognizing resources ---

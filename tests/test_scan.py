@@ -5,17 +5,16 @@ import json
 import os
 import shutil
 import subprocess
-from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
+from conftest import NOW
 from okf import scan as scan_module
 from okf.cli import main
 from okf.scan import RepoSpec, ScanError, _clone_failure, parse_repos, scan, score
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
-NOW = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
 
 
 def make_repo(root: Path, files: dict, when="2026-09-01T10:00:00Z") -> Path:

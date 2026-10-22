@@ -1,71 +1,25 @@
 """`okf fix`: mechanical fixes (layer 1) and LLM drafts (layer 2, with a mocked model)."""
 
 import json
-import os
 import shutil
-import subprocess
 import threading
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from pathlib import Path
 
 import pytest
 
-from conftest import doc, meta
+from conftest import doc, meta, NOW
 from okf.bundle import load_document
 from okf.cli import main
 from okf.fix import (
     FIX_ACTOR, AnthropicProvider, FixError, OpenAICompatibleProvider, Provider, _actor, _replace_token, apply,
-    plan_drafts, plan_fixes, provider_from_env, render,
+    provider_from_env, render,
 )
-from okf.git import Change, History
+from okf.git import Change
 from okf.schema import verifications
-from okf.trust import Sidecar, build_map, verify
+from okf.trust import Sidecar, verify
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
-NOW = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
-
-
-class Repo:
-    def __init__(self, root: Path):
-        self.root = root
-        root.mkdir(parents=True, exist_ok=True)
-        self.git("init", "-q", "-b", "main")
-
-    def git(self, *args, when=None):
-        env = {**os.environ, **({"GIT_AUTHOR_DATE": when, "GIT_COMMITTER_DATE": when} if when else {})}
-        return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.com", *args], cwd=self.root,
-                              check=True, capture_output=True, text=True, env=env).stdout
-
-    def write(self, files):
-        for rel, text in files.items():
-            (self.root / rel).parent.mkdir(parents=True, exist_ok=True)
-            (self.root / rel).write_text(text, encoding="utf-8")
-        return self
-
-    def commit(self, when, message="change"):
-        self.git("add", "-A")
-        self.git("commit", "-q", "-m", message, when=when)
-        return self
-
-    def read(self, rel):
-        return (self.root / rel).read_text(encoding="utf-8")
-
-    def plan(self, changes=None, only=None, provider=None, now=NOW, **draft_options):
-        history = History(self.root, now)
-        trust_map = build_map(self.root, history, changes, now=now)
-        plan = plan_fixes(self.root, history, trust_map, changes, only)
-        if provider:
-            plan_drafts(plan, trust_map, history, provider, only, **draft_options)
-        return plan
-
-    def units(self, now=NOW):
-        return {u.name: u for u in build_map(self.root, History(self.root, now), now=now).units}
-
-
-@pytest.fixture
-def repo(tmp_path):
-    return Repo(tmp_path / "repo")
 
 
 def moved_repo(repo):

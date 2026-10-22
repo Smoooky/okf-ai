@@ -7,10 +7,11 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import pytest
 
+from conftest import Repo
 from okf import notify as notify_module
 from okf.cli import main
 from okf.notify import NOBODY, NotifyError, reminders, send, slack_message, teams_message
-from test_trust import AGENTS, Repo, code_repo
+from test_trust import AGENTS, code_repo
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
 
