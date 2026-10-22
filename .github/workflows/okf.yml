@@ -4,6 +4,8 @@ on:
   pull_request:
   push:
     branches: [main]
+  schedule:
+    - cron: "0 7 * * 1-5"  # okf notify, weekdays 07:00 UTC; it sends only with a webhook secret
   workflow_dispatch:
     inputs:
       okf-auto-pr:
@@ -33,6 +35,7 @@ jobs:
 
   knowledge:
     name: Agent instructions and knowledge
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -222,3 +225,34 @@ jobs:
           if [ -n "$ANTHROPIC_API_KEY" ]; then draft="--draft"; fi
           if [ -n "$OKF_LLM_API_KEY" ] && [ -n "$OKF_LLM_BASE_URL" ] && [ -n "$OKF_LLM_MODEL" ]; then draft="--draft"; fi
           okf fix "$OKF_REPO" --pr $draft
+
+  notify:
+    name: Remind who confirmed what to recheck
+    # On the schedule above, and only if a webhook secret is set: OKF_SLACK_WEBHOOK or OKF_TEAMS_WEBHOOK.
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      OKF_SLACK_WEBHOOK: ${{ secrets.OKF_SLACK_WEBHOOK }}
+      OKF_TEAMS_WEBHOOK: ${{ secrets.OKF_TEAMS_WEBHOOK }}
+    steps:
+      - uses: actions/checkout@v4
+        if: env.OKF_SLACK_WEBHOOK != '' || env.OKF_TEAMS_WEBHOOK != ''
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        if: env.OKF_SLACK_WEBHOOK != '' || env.OKF_TEAMS_WEBHOOK != ''
+        with:
+          python-version: "3.12"
+      - name: okf notify
+        if: env.OKF_SLACK_WEBHOOK != '' || env.OKF_TEAMS_WEBHOOK != ''
+        env:
+          OKF_CONFLUENCE_URL: ${{ vars.OKF_CONFLUENCE_URL }}
+          OKF_JIRA_URL: ${{ vars.OKF_JIRA_URL }}
+          OKF_ATLASSIAN_EMAIL: ${{ vars.OKF_ATLASSIAN_EMAIL }}
+          OKF_ATLASSIAN_TOKEN: ${{ secrets.OKF_ATLASSIAN_TOKEN }}
+          OKF_ATLASSIAN_PAT: ${{ secrets.OKF_ATLASSIAN_PAT }}
+        run: |
+          pip install ".[llm]"
+          okf notify "$OKF_REPO"

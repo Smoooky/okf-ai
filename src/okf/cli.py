@@ -1,9 +1,10 @@
-"""Command line: okf init | trust | fix | verify | view | import | sources | agents-check | stale | validate | agents | scan."""
+"""Command line: okf init | trust | fix | verify | view | notify | import | sources | agents-check | stale | validate | agents | scan."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +18,7 @@ from okf.git import (
 )
 from okf.fix import KEY_HELP, FixError, ReplayProvider, apply, plan_drafts, plan_fixes, provider_from_env, render
 from okf.importer import import_confluence
+from okf.notify import NotifyError, load_people, plain, reminders, send, slack_message, teams_message
 from okf.pr import PrError, open_pr
 from okf.instructions import check_repository
 from okf.scan import ScanError, find_repos, parse_repos, scan, score
@@ -54,6 +56,8 @@ def main(argv: list[str] | None = None) -> int:
         return _view(args)
     if args.command == "init":
         return _init(args)
+    if args.command == "notify":
+        return _notify(args)
     if args.command in ("agents-check", "trust", "sources"):
         if not Path(args.repo).is_dir():
             print(f"okf: error: directory not found: {args.repo}", file=sys.stderr)
@@ -122,6 +126,18 @@ def _parser() -> argparse.ArgumentParser:
     view.add_argument("repo", nargs="?", default=".", help="a bundle, or a repository with bundles (default: .)")
     view.add_argument("--out", default="site", metavar="DIR", help="where to write the site (default: site)")
     _add_now(view)
+
+    notify = commands.add_parser("notify", help="remind whoever confirmed a section that it needs a recheck "
+                                 "(Slack or Teams)")
+    notify.add_argument("repo", nargs="?", default=".", help="repository (default: .)")
+    notify.add_argument("--slack-webhook", metavar="URL", default=os.environ.get("OKF_SLACK_WEBHOOK"),
+                        help="Slack incoming webhook (default: $OKF_SLACK_WEBHOOK)")
+    notify.add_argument("--teams-webhook", metavar="URL", default=os.environ.get("OKF_TEAMS_WEBHOOK"),
+                        help="Microsoft Teams Workflows webhook (default: $OKF_TEAMS_WEBHOOK)")
+    notify.add_argument("--people", metavar="FILE", default=".okf/people.yml",
+                        help="human:<id> -> {slack: <member id>} to mention people (default: .okf/people.yml)")
+    notify.add_argument("--dry-run", action="store_true", help="print the messages, send nothing")
+    _add_now(notify)
 
     importer = commands.add_parser("import", help="bring knowledge from Confluence into git as OKF documents")
     importer.add_argument("system", choices=["confluence"], help="where from")
@@ -429,6 +445,47 @@ def _verify(args: argparse.Namespace) -> int:
     elif not names:
         print("okf verify: nothing to verify", file=sys.stderr)
     return 0
+
+
+def _notify(args: argparse.Namespace) -> int:
+    root = Path(args.repo).resolve()
+    if not root.is_dir():
+        print(f"okf: error: directory not found: {args.repo}", file=sys.stderr)
+        return 2
+    if not (args.slack_webhook or args.teams_webhook or args.dry_run):
+        print("okf: error: set --slack-webhook (or OKF_SLACK_WEBHOOK) or --teams-webhook (or OKF_TEAMS_WEBHOOK); "
+              "--dry-run prints the messages", file=sys.stderr)
+        return 2
+    now = _now(args)
+    git_root = toplevel(root)
+    trust_map = build_map(root, History(git_root, now), None, None, now)
+    found = reminders(trust_map)
+    if not found:
+        print("okf notify: nothing to recheck, no messages", file=sys.stderr)
+        return 0
+    web = web_base(git_root)
+    people = load_people(root / args.people)
+    targets = [(name, url) for name, url in (("slack", args.slack_webhook), ("teams", args.teams_webhook)) if url]
+    failed = 0
+    for reminder in found:
+        for name, url in targets or [("slack", None)]:
+            message = (slack_message(reminder, root, web, git_root, people) if name == "slack"
+                       else teams_message(reminder, root, web, git_root))
+            if args.dry_run:
+                print(f"--- {name}, for {reminder.who} ---\n{plain(message)}\n")
+                continue
+            try:
+                send(url, message)
+                print(f"okf notify: sent to {name} for {reminder.who} ({len(reminder.units)} units)", file=sys.stderr)
+            except NotifyError as exc:
+                failed += 1
+                print(f"okf notify: {name}, for {reminder.who}: {exc}", file=sys.stderr)
+    sys.stdout.flush()
+    units = sum(len(r.units) for r in found)
+    verb = "would send" if args.dry_run else "sent"
+    print(f"okf notify: {units} units to recheck, {len(found)} people or groups; {verb} "
+          f"{len(found) * max(len(targets), 1) - failed} messages", file=sys.stderr)
+    return 1 if failed else 0
 
 
 def _init(args: argparse.Namespace) -> int:

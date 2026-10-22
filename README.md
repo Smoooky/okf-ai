@@ -15,6 +15,7 @@
 - коннекторы Confluence и Jira: закрытый эпик или новая версия страницы просит перепроверить документ;
   `okf import confluence` переносит страницы в git как документы OKF; свой коннектор — один файл;
 - `okf agents-check` и `okf stale` — страж в PR: битые пути и команды в инструкциях, документы, чей код поменялся;
+- `okf notify` — напоминание в Slack или Teams тем, кто подтверждал то, что теперь «перепроверить»;
 - `okf validate` — валидатор базы знаний [OKF v0.2](https://github.com/GoogleCloudPlatform/open-knowledge-format/blob/main/SPEC.md)
   плюс строгий профиль okf-ai ([спека](etc/spec/cli-validator-v2.md)); `okf agents` — роутер `AGENTS.md` для бандла;
 - [GitHub Action](.github/workflows/okf.yml) — всё это на каждом pull request.
@@ -237,6 +238,27 @@ okf verify --all-current                  # все неподтверждённ�
 репозитории переменная `OKF_AUTO_PR=true`, или вручную (Run workflow → `okf-auto-pr`). У него `permissions:
 contents: write, pull-requests: write`; в настройках репозитория нужно разрешить GitHub Actions создавать PR
 (Settings → Actions → General → «Allow GitHub Actions to create and approve pull requests»).
+
+## `okf notify`: напоминания ответственным
+
+`okf notify --slack-webhook $OKF_SLACK_WEBHOOK` (или `--teams-webhook $OKF_TEAMS_WEBHOOK`) берёт разделы и документы
+«перепроверить», группирует их по тому, кто подтверждал последним (`verified[].by` / `.okf/trust.yml`), и шлёт
+одно сообщение на человека: что перепроверить и почему, ссылка на строку в GitHub и одна команда, которая
+подтверждает всё после прочтения. То, что никто ещё не подтверждал, уходит одним сообщением в канал.
+
+```text
+:mag: okf-ai: *human:teamlead_ivan*, 2 sections you confirmed need a recheck
+• AGENTS.md#Auth: src/auth.py changed 2026-10-20, last verified 2026-09-05 by human:teamlead_ivan
+• knowledge/auth_flow.md: src/auth.py changed 2026-10-20, last verified 2026-10-19 by human:teamlead_ivan
+After reading, confirm in one command: `okf verify "AGENTS.md#Auth" "knowledge/auth_flow.md"`
+```
+
+- Slack — incoming webhook (`{"text": …}`), Teams — webhook Workflows (Adaptive Card). Чтобы Slack упоминал
+  человека, в `.okf/people.yml` — `human:teamlead_ivan: {slack: U0123ABC}`.
+- `--dry-run` печатает сообщения и ничего не шлёт. На 429/5xx — повторы с паузой; адрес вебхука — секрет и не
+  печатается, ошибка называет только HTTP-статус; код выхода `1`, если что-то не ушло.
+- В Action — задание `notify` по расписанию (будни, 07:00 UTC), только если задан секрет `OKF_SLACK_WEBHOOK` или
+  `OKF_TEAMS_WEBHOOK`. Проверено на локальном мок-вебхуке; в настоящие Slack и Teams ничего не отправлялось.
 
 ## Источники вне git: Confluence и Jira
 
@@ -492,7 +514,9 @@ okf scan --score report/label.csv       # точность связей посл
 5. `okf validate $OKF_BUNDLE --strict` и `okf stale --base ...` — база знаний;
 6. отчёт в лог, в job summary и аннотациями на строки; в PR из этого же репозитория — обновляемым комментарием;
 7. по желанию (`OKF_AUTO_PR=true`) — задание `auto-pr`: на push в `main` правки уходят PR `[OKF-Update]`
-   (`okf fix --pr`), открытый такой PR обновляется, а не дублируется.
+   (`okf fix --pr`), открытый такой PR обновляется, а не дублируется;
+8. по расписанию, если задан секрет `OKF_SLACK_WEBHOOK` или `OKF_TEAMS_WEBHOOK`, — `okf notify`: напоминания тем,
+   кто подтверждал разделы, которые теперь «перепроверить».
 
 Коннекторы Confluence и Jira — по желанию: переменные `OKF_CONFLUENCE_URL`, `OKF_JIRA_URL`, `OKF_ATLASSIAN_EMAIL`
 и секреты `OKF_ATLASSIAN_TOKEN` или `OKF_ATLASSIAN_PAT`. Без них шаги работают как раньше и в сеть не ходят.
@@ -564,6 +588,21 @@ okf trust: 16 units: 6 verified and current, 7 to recheck, 1 broken, 2 not verif
 ```
 
 На GitHub это же попадает в job summary и комментарий PR (шаг `okf trust --since origin/<base>` в Action).
+
+Тем, кто подтверждал устаревшее, — напоминание (на демо без вебхука, только печать):
+
+```bash
+git switch main
+okf notify --dry-run
+```
+
+```text
+--- slack, for human:teamlead_ivan ---
+:mag: okf-ai: *human:teamlead_ivan*, 2 sections you confirmed need a recheck
+• `AGENTS.md#Auth`: src/auth.py changed 2026-10-20, last verified 2026-09-05 by human:teamlead_ivan
+• `knowledge/auth_flow.md`: src/auth.py changed 2026-10-20, last verified 2026-10-19 by human:teamlead_ivan
+After reading, confirm in one command: `okf verify "AGENTS.md#Auth" "knowledge/auth_flow.md"`
+```
 
 **3. okf-ai само предлагает правки:**
 
@@ -688,7 +727,7 @@ okf validate examples/demo/knowledge --strict && okf agents examples/demo/knowle
 ## Структура
 
 ```text
-src/okf/        trust.py (карта доверия, verify), fix.py (правки и черновики), pr.py (okf fix --pr), scan.py (проба), instructions.py (agents-check), schema.py (поля и правила OKF,
+src/okf/        trust.py (карта доверия, verify), fix.py (правки и черновики), pr.py (okf fix --pr), notify.py (okf notify), scan.py (проба), instructions.py (agents-check), schema.py (поля и правила OKF,
                 профили okf и strict), importer.py (okf import), view.py (report.html, okf view), scaffold.py (okf init), validate.py, stale.py,
                 agents.py, bundle.py, git.py, cli.py
 src/okf/sources/ коннекторы: base.py (интерфейс Source), git.py, confluence.py, jira.py, http.py (запросы, фикстуры)
