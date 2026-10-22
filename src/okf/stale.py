@@ -49,6 +49,8 @@ def _changed_sources(doc: Document, bundle: Bundle, changed_paths: set[str], rep
     updated = _relative(doc.path, repo_root) in changed_paths
     issues = []
     for resource in schema.sources(doc):
+        if any(ch.isspace() for ch in resource):
+            continue  # a scope descriptor ("payments, all regions"), not a path: as in okf trust
         patterns = resource_paths(resource, doc, bundle.root, repo_root)
         matched = sorted(path for path in changed_paths if any(source_matches(p, path) for p in patterns))
         if not matched:
@@ -72,6 +74,8 @@ def _remote_sources(doc: Document, sources: Registry) -> list[Issue]:
     issues = []
     for entry in _entries(doc):
         resource = entry["resource"].strip()
+        if any(ch.isspace() for ch in resource):
+            continue
         connector = sources.find(resource)
         if connector is None or connector is sources.git:
             continue

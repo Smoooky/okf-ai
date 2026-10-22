@@ -14,6 +14,7 @@ from conftest import REPO_ROOT, doc, meta
 from okf.bundle import load_document
 from okf.cli import main
 from okf.git import Change, History
+from okf.report import display_path as display
 from okf.schema import verifications
 from okf.trust import (
     Sidecar, TrustError, build_map, default_actor, section_hash, sections, verify,
@@ -376,6 +377,19 @@ def test_cli_verify(repo, capsys, monkeypatch):
     code, _, err = run(capsys, "verify", "--all-current", "--by", "human:ivan")
     assert code == 0 and err.count("verified by") == 2  # the intro and Billing; Auth was verified already
     assert run(capsys, "verify")[0] == 2
+
+
+def test_cli_trust_since_strict_fails_on_what_the_change_broke(repo, capsys):
+    code_repo(repo).write({"AGENTS.md": AGENTS + "\n## Old\n\nSee `src/gone.py`.\n"}).commit("2026-09-01T10:00:00Z")
+    repo.git("checkout", "-q", "-b", "pr")
+    repo.write({"README.txt": "x\n"}).commit("2026-10-01T10:00:00Z")
+    code, out, _ = run(capsys, "trust", str(repo.root), "--since", "main", "--strict")
+    assert (code, out) == (0, [])  # AGENTS.md#Old was broken before this change: not this change's problem
+    repo.write({"AGENTS.md": AGENTS.replace("`src/auth.py`", "`src/auth.py` and `src/nope.py`")
+                + "\n## Old\n\nSee `src/gone.py`.\n"}).commit("2026-10-02T10:00:00Z")
+    code, out, _ = run(capsys, "trust", str(repo.root), "--since", "main", "--strict")
+    assert code == 1
+    assert [line.split(": trust: ")[0] for line in out] == [f"[ERROR] {display(repo.root / 'AGENTS.md')}#Auth"]
 
 
 def test_cli_trust_since_needs_git(tmp_path, capsys):

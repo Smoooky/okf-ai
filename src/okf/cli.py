@@ -22,7 +22,9 @@ from okf.sources import Unavailable, registry
 from okf.sources.base import day
 from okf.sources.confluence import ConfluenceSource
 from okf.stale import find_stale, normalize_repo_path
-from okf.trust import TrustError, build_map, default_actor, knowledge_units, unit_json, verify, verify_units
+from okf.trust import (
+    TrustError, build_map, default_actor, knowledge_units, machine_edited, unit_json, verify, verify_units,
+)
 from okf.validate import has_errors, validate_bundle
 from okf.values import parse_now
 
@@ -115,7 +117,7 @@ def _parser() -> argparse.ArgumentParser:
     mode = scan_parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--repos", metavar="FILE", help="owner/repo (or owner/repo@commit) per line")
     mode.add_argument("--score", metavar="LABELS", help="precision of a hand-labelled label.csv")
-    mode.add_argument("--find", type=int, metavar="N", help="print N public repositories with AGENTS.md or "
+    mode.add_argument("--find", type=_positive, metavar="N", help="print N public repositories with AGENTS.md or "
                       "CLAUDE.md pushed recently (needs `gh auth login`)")
     scan_parser.add_argument("--out", default="report", help="report directory (default: report)")
     scan_parser.add_argument("--jobs", type=int, default=4, help="repositories at a time (default: 4)")
@@ -159,6 +161,16 @@ def _parser() -> argparse.ArgumentParser:
     _add_format(stale)
     stale.set_defaults(handler=_stale)
     return parser
+
+
+def _positive(text: str) -> int:
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"not a number: {text}") from None
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be 1 or more, got {value}")
+    return value
 
 
 def _add_changes(parser: argparse.ArgumentParser) -> None:
@@ -239,14 +251,15 @@ def _trust(args: argparse.Namespace) -> int:
             return 2
     history = History(git_root, now)
     trust_map = build_map(root, history, changes, [Path(b) for b in args.bundle] or None, now, base_commit)
+    problems = trust_map.problems()
     if changes is not None:
-        shown = [u for u in trust_map.units if u.in_change]
-        problems = trust_map.in_change()
+        broken = trust_map.broken_in_change()
+        shown = [u for u in trust_map.units if u.in_change or u in broken]
     else:
         shown = trust_map.units
-        problems = [u for u in shown if u.level in ("broken", "recheck")]
     if args.json:
-        data = {"summary": _trust_summary(trust_map), "units": [unit_json(u, root) for u in shown],
+        data = {"summary": _trust_summary(trust_map), "warnings": [SHALLOW_HINT] if trust_map.shallow else [],
+                "units": [unit_json(u, root) for u in shown],
                 "notes": [{"file": display_path(p), "note": n} for p, n in trust_map.notes]}
         print(json.dumps(data, ensure_ascii=False, indent=2))
     else:
@@ -256,7 +269,7 @@ def _trust(args: argparse.Namespace) -> int:
         sys.stderr.flush()
         for unit in shown:
             label, message = _TRUST_LABELS[unit.level], unit.message
-            if unit.updated_in_change:
+            if unit.updated_in_change and unit.level != "broken":
                 label = INFO
                 message = f"{', '.join(unit.in_change)} and this {'section' if unit.section else 'file'} " \
                           "changed together in this change"
@@ -348,23 +361,27 @@ def _verify(args: argparse.Namespace) -> int:
         return 2
     try:
         by = args.by or default_actor(cwd)
-        names = []
+        names, skipped = [], []
         for target in args.units:
             folder = (cwd / target.partition("#")[0]).resolve().parent
             names.extend(verify(target, by, at, cwd, toplevel(folder) if folder.is_dir() else None))
         if args.all_current:
             root = Path(args.repo).resolve()
             git_root = toplevel(root)
-            trust_map = build_map(root, History(git_root), None, None)
+            trust_map = build_map(root, History(git_root), None, None, sources=registry({}))
             current = [u for u in trust_map.units if u.kind == "instruction" and u.level == "unverified"]
-            names.extend(verify_units(current, by, at, cwd, git_root))
+            skipped = [u.name for u in current if machine_edited(u)]  # AI edits: a person reads them one by one
+            names.extend(verify_units([u for u in current if not machine_edited(u)], by, at, cwd, git_root))
     except TrustError as exc:
         print(f"okf: error: {exc}", file=sys.stderr)
         return 2
     stamp = at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     for name in names:
         print(f"okf verify: {name} verified by {by} at {stamp}", file=sys.stderr)
-    if not names:
+    if skipped:
+        print(f"okf verify: skipped {len(skipped)} edited by a tool or a model ({', '.join(skipped)}): "
+              "read each and confirm it with okf verify <unit>", file=sys.stderr)
+    elif not names:
         print("okf verify: nothing to verify", file=sys.stderr)
     return 0
 
@@ -426,7 +443,7 @@ def _scan(args: argparse.Namespace) -> int:
         if args.score:
             sys.stdout.write(score(Path(args.score)))
             return 0
-        if args.find:
+        if args.find is not None:
             for name in find_repos(args.find, args.months, log):
                 print(name)
             return 0

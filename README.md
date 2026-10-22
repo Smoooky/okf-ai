@@ -57,11 +57,11 @@ okf trust: 16 units: 9 verified and current, 3 to recheck, 1 broken, 3 not verif
 [WARNING] AGENTS.md#Auth: trust: src/auth.py changed 2026-10-20, last verified 2026-09-05 by human:teamlead_ivan
 [WARNING] knowledge/auth_flow.md: trust: src/auth.py changed 2026-10-20, last verified 2026-10-19 by human:teamlead_ivan
 [OK] AGENTS.md#Billing: trust: verified 2026-09-05 by human:maria_backend; sources unchanged since
-[INFO] AGENTS.md#Правила: trust: not verified; last edited 2026-09-01; sources unchanged since
+[INFO] AGENTS.md#Правила: trust: not verified; last edited 2026-09-01; no code references found
 ```
 
 **Единицы.** Каждый раздел (`##`) инструкций для агентов: `AGENTS.md` и `CLAUDE.md` на любом уровне,
-`.cursor/rules/*.mdc`, `.cursorrules`, `.github/copilot-instructions.md`, `.ruler/*.md`; текст до первого раздела —
+`.cursor/rules/*.mdc`, `.cursorrules`, `.github/copilot-instructions.md`, `.ruler/**/*.md`, `.rulesync/**/*.md`; текст до первого раздела —
 отдельная единица `AGENTS.md`, файл без разделов — одна единица. Плюс каждый файл знаний OKF — любой `.md`
 с `type` в шапке (или только бандлы из `--bundle DIR`). Роутер, который пишет `okf agents`, не считается.
 
@@ -79,14 +79,17 @@ okf trust: 16 units: 9 verified and current, 3 to recheck, 1 broken, 3 not verif
 | Уровень | Строка | Когда |
 |---|---|---|
 | сломано | `ERROR` | раздел ссылается на несуществующий файл, скрипт `package.json`, цель `Makefile` |
-| перепроверить | `WARNING` | код менялся после подтверждения (или, если подтверждений нет, после правки раздела); упомянутый файл переехал (`git log`: «moved to новый/путь»); раздел правили после подтверждения; у OKF — `generated.at` позже `verified` или наступил `stale_after` |
+| перепроверить | `WARNING` | код (страница Confluence, закрытая задача Jira) менялся после подтверждения (или, если подтверждений нет, после правки раздела); упомянутый файл переехал (`git log`: «moved to новый/путь»); раздел правили после подтверждения; у OKF — наступил `stale_after` или `generated.at` позже `verified`, а автор `generated.by` — человек или не указан (`content regenerated … after it was verified`); текст, написанный машиной, — если его источник поменялся после `generated.at` |
 | подтверждено | `OK` | последнее подтверждение позже изменений кода: человеком (`human:`) или процессом (`process:`) |
-| не подтверждено | `INFO` | подтверждений нет, но и код с тех пор не менялся |
+| не подтверждено | `INFO` | подтверждений нет, но и код с тех пор не менялся; или текст после последнего подтверждения написала машина — `generated.by` не `human:` (`okf fix`, черновик LLM, `okf import`, агент): `edited by … ; not verified` |
 
-`--since origin/main` — только то, что этот набор изменений делает «перепроверить»: каждая единица, чей
-источник изменён, с указанием файла. Если тот же PR поправил и сам раздел, он не помечается
-(`[INFO] ... changed together in this change`). `--json` — то же для машин. Код выхода `0`; с `--strict` — `1`,
-если есть «сломано» или «перепроверить».
+`--since origin/main` — только то, что этот набор изменений задевает: каждая единица, чей источник изменён,
+с указанием файла, и единицы, которые «сломаны» и задеты этим изменением (их источник или сам раздел/документ).
+Если тот же PR поправил и сам раздел, он не помечается «перепроверить» (`[INFO] ... changed together in this change`),
+но сломанный — остаётся `ERROR`. `--json` — то же для машин; при неполной истории в нём есть `"warnings"`
+с подсказкой про `fetch-depth: 0`. Код выхода `0`; с `--strict` — `1`, если есть «сломано» или «перепроверить»,
+а с `--since` — если этот набор изменений что-то делает «перепроверить» или задевает сломанное
+(сломанное до PR и им не тронутое на код выхода не влияет).
 
 **Чтобы не было ложных «сломано»** (они быстрее всего убивают доверие к отчёту):
 - заглушки и примеры (`path/to/file.ts`, `src/foo.py`, `your-project/…`, `example/…`) — статус «неясно», не проверяются;
@@ -110,6 +113,10 @@ okf verify AGENTS.md                      # все разделы файла; AG
 okf verify knowledge/auth_flow.md         # файл знаний OKF
 okf verify --all-current                  # все неподтверждённые разделы, чей код не менялся
 ```
+
+`--all-current` не подтверждает то, что после последнего подтверждения человеком написала машина
+(`okf fix`, черновик LLM): такие разделы он перечисляет как пропущенные — их читают и подтверждают по одному,
+`okf verify AGENTS.md#Auth`.
 
 - Для инструкций пишет в боковой файл `.okf/trust.yml` (ближайший вверх по папкам, иначе в корне git):
   `{unit: AGENTS.md#Auth, hash, sources, verified: [{by, at}]}`. Сами инструкции не трогает; хэш замечает,
@@ -262,7 +269,10 @@ CONNECTORS: list[type[Source]] = [ConfluenceSource, JiraSource, MyWikiSource]
 ```
 
 **Какие файлы.** `AGENTS.md` и `CLAUDE.md` в корне и во вложенных папках, `.cursor/rules/**/*.mdc`, `.cursorrules`,
-`.github/copilot-instructions.md`. Пропускаются `node_modules`, `.git`, виртуальные окружения и прочие скрытые папки.
+`.github/copilot-instructions.md`, правила [Ruler](https://github.com/intellectronica/ruler) и
+[rulesync](https://github.com/dyoshikawa/rulesync) — `.ruler/**/*.md` и `.rulesync/**/*.md`. Пропускаются `.git`,
+`node_modules`, `__pycache__`, `venv`, `.venv`, `dist`, `build`, `.tox`, `.pytest_cache`, `.mypy_cache`, чужой код
+в `vendor`, `third_party`, `third-party` и прочие скрытые папки (кроме `.cursor`, `.github`, `.ruler`, `.rulesync`).
 
 **Что из них достаётся.**
 - Пути: в обратных кавычках, в markdown-ссылках, импорты `@path` в `CLAUDE.md`, «голые» пути вида `src/auth.py` в тексте.
@@ -285,7 +295,8 @@ CONNECTORS: list[type[Source]] = [ConfluenceSource, JiraSource, MyWikiSource]
 | `AGENTS.md` и `CLAUDE.md` в одной папке не расходятся: разные команды для одной задачи, разные менеджеры пакетов, разные пути к одноимённому файлу | `AGENTS.md runs "npm test", CLAUDE.md runs "npm run test:unit"` |
 
 По умолчанию всё это WARNING и код выхода `0`; с `--strict` битые пути и команды — ERROR и код `1`
-(расхождения между файлами остаются WARNING). Если в `Makefile` есть `include` или шаблонные цели, отсутствие цели не сообщается.
+(расхождения между файлами остаются WARNING). Так же и нечитаемый файл инструкций (не UTF-8): WARNING,
+с `--strict` — ERROR. Если в `Makefile` есть `include` или шаблонные цели, отсутствие цели не сообщается.
 
 **В pull request** (`--base origin/main` или `--changed файлы...`) дополнительно:
 - файл, на который ссылается инструкция, переименован — `"src/config.py" was renamed to src/settings.py in this change`;
@@ -312,6 +323,9 @@ CONNECTORS: list[type[Source]] = [ConfluenceSource, JiraSource, MyWikiSource]
 
 **По умолчанию — OKF v0.2.** Обязателен только `type`; незнакомые типы и лишние ключи — не ошибка.
 Официальные примеры бандлов проходят без ошибок (один лежит в [tests/fixtures](tests/fixtures/okf-official)).
+Проверяется каждый `.md`, кроме `index.md` и `log.md` на любом уровне и `AGENTS.md` в корне бандла: корневой
+`AGENTS.md` пропускается всегда (сгенерированный `okf agents` или написанный вручную), его ссылки не считаются;
+вложенный `sub/AGENTS.md` — обычный документ, без шапки с `type` это ERROR.
 
 | Правило | Уровень |
 |---|---|

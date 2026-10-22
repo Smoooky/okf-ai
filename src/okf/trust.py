@@ -102,6 +102,18 @@ class TrustMap:
         """Units whose code a pull request changed without touching the unit itself."""
         return [u for u in self.units if u.in_change and not u.updated_in_change]
 
+    def broken_in_change(self) -> list[Unit]:
+        """Broken units a pull request touched: their code, or the section or document itself."""
+        return [u for u in self.units if u.level == "broken" and (u.in_change or u.updated_in_change)]
+
+    def problems(self) -> list[Unit]:
+        """What `okf trust --strict` fails on: everything broken or to recheck, or with --since only
+        what this change makes to recheck or touched while broken."""
+        if not self.since:
+            return [u for u in self.units if u.level in ("broken", "recheck")]
+        found = self.in_change()
+        return found + [u for u in self.broken_in_change() if u not in found]
+
 
 # --- Building the map ----------------------------------------------------------------
 
@@ -377,6 +389,15 @@ def _evaluate(unit: Unit, root: Path, history: History, changed: set[str] | None
     edited = f"; last edited {_day(unit.last_edited)}" if unit.last_edited else ""
     reason = "unverified" if unit.sources or _readable(unit) else "unverified:no-sources"
     return result("unverified", f"not verified{edited}" + _sources_note(unit), reason)
+
+
+def machine_edited(unit: Unit) -> bool:
+    """A tool or a model (okf fix, an LLM draft, okf import) wrote the current text after the last
+    human confirmation: only a person who read it may confirm it, one unit at a time."""
+    if not unit.generated_by or schema.is_human(unit.generated_by) or unit.generated_at is None:
+        return False
+    human = max((at for at, by in unit.verifications if schema.is_human(by)), default=None)
+    return human is None or unit.generated_at > human
 
 
 def _readable(unit: Unit) -> list[Check]:

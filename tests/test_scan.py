@@ -176,3 +176,10 @@ def test_cli_scan(tmp_path, capsys, monkeypatch):
     monkeypatch.setattr(scan_module.shutil, "which", lambda _: None)
     assert main(["scan", "--find", "5"]) == 2
     assert "gh auth login" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("value", ["0", "-3", "many"])
+def test_scan_find_needs_a_positive_number(value, capsys):
+    with pytest.raises(SystemExit) as exc:
+        main(["scan", "--find", value])
+    assert exc.value.code == 2 and "--find" in capsys.readouterr().err

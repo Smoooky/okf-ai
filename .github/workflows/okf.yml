@@ -72,10 +72,13 @@ jobs:
           OKF_ATLASSIAN_TOKEN: ${{ secrets.OKF_ATLASSIAN_TOKEN }}
           OKF_ATLASSIAN_PAT: ${{ secrets.OKF_ATLASSIAN_PAT }}
         run: |  # proposals only: this workflow never commits or opens a pull request
-          draft=""
-          if [ -n "$ANTHROPIC_API_KEY" ] || [ -n "$OKF_LLM_API_KEY" ]; then draft="--draft"; fi
+          draft=""  # the same keys okf fix --draft needs: Anthropic, or all three OKF_LLM_* settings
+          if [ -n "$ANTHROPIC_API_KEY" ]; then draft="--draft"; fi
+          if [ -n "$OKF_LLM_API_KEY" ] && [ -n "$OKF_LLM_BASE_URL" ] && [ -n "$OKF_LLM_MODEL" ]; then draft="--draft"; fi
           okf fix "$OKF_REPO" $draft $OKF_SINCE_ARGS > fix.diff 2> fix-summary.txt
-          if [ -z "$draft" ]; then echo "LLM drafts skipped: no ANTHROPIC_API_KEY or OKF_LLM_API_KEY secret." >> fix-summary.txt; fi
+          if [ -z "$draft" ]; then
+            echo "LLM drafts skipped: set the ANTHROPIC_API_KEY secret, or OKF_LLM_API_KEY with OKF_LLM_BASE_URL and OKF_LLM_MODEL." >> fix-summary.txt
+          fi
           cat fix-summary.txt fix.diff
 
       - name: okf agents-check

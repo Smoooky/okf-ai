@@ -113,6 +113,13 @@ def test_github_url_and_relative_sources(make_bundle):
     ]
 
 
+def test_scope_descriptors_are_not_paths(make_bundle):
+    # "/src/* every module" would match "kb/src/a b.py" as a glob; a resource with spaces is a scope
+    # descriptor, skipped as in okf trust
+    files = {"kb/scope.md": sourced("/src/* every module"), "kb/path.md": sourced("/src/*")}
+    assert stale(make_bundle, files, ["kb/src/a every module"]) == [("WARNING", "path.md", "sources")]
+
+
 def test_official_style_bundle_relative_path_without_slash(make_bundle):
     files = {"kb/metrics/margin.md": sourced("policies/margin-standard.md"), "kb/policies/margin-standard.md": doc(meta())}
     assert stale(make_bundle, files, ["kb/policies/margin-standard.md"]) == [("WARNING", "margin.md", "sources")]

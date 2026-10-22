@@ -269,8 +269,11 @@ def _scripts(text: str | None) -> dict[str, str]:
 
 
 def _replace_token(line: str, old: str, new: str) -> str | None:
-    """`line` with the first whole `old` (not part of a longer path) replaced, or None if there is none."""
-    pattern = re.compile(rf"(?<![\w./@-]){re.escape(old)}(?![\w/-])( {{2,}})?")
+    """`line` with the first whole `old` (not part of a longer path) replaced, or None if there is none.
+
+    The name must not go on: `src/config.py` is not inside `src/config.py.bak` or `src/config.py_old`,
+    but a full stop that ends a sentence is not part of it."""
+    pattern = re.compile(rf"(?<![\w./@-]){re.escape(old)}(?![\w/-]|\.[\w/-])( {{2,}})?")
 
     def replace(match: re.Match) -> str:
         padding = match.group(1)  # keep a column of aligned comments aligned

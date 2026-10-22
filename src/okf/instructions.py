@@ -866,10 +866,10 @@ def _check_file(instruction: InstructionFile, repository: Repository, strict: bo
     if instruction.alias_of or instruction.generated_from:
         return [Issue(INFO, instruction.path, "file", instruction.note(repository.root), 1)], _Facts(), (0, 0)
     found = references(instruction, repository)
-    if found.error:
-        return [Issue(ERROR, instruction.path, "file", found.error)], found.facts, (0, 0)
-    issues: list[Issue] = []
     problem = ERROR if strict else WARNING
+    if found.error:  # unreadable or not UTF-8: a problem like a broken path, an error only with --strict
+        return [Issue(problem, instruction.path, "file", found.error)], found.facts, (0, 0)
+    issues: list[Issue] = []
 
     def report(level: str, kind: str, message: str, line: int) -> None:
         issues.append(Issue(level, instruction.path, kind, f"{message} (line {line})", line))

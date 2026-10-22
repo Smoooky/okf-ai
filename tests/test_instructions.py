@@ -195,6 +195,17 @@ def test_missing_path_is_warning_or_error_in_strict(repo):
     assert short(check(root, strict=True)) == [(ERR, "AGENTS.md", "path")]
 
 
+def test_unreadable_file_is_warning_or_error_in_strict(repo, capsys):
+    from okf.cli import main
+
+    root = repo({"src/auth.py": ""})
+    (root / "AGENTS.md").write_bytes("Вход: `src/auth.py`\n".encode("cp1251"))
+    assert short(check(root)) == [(WARN, "AGENTS.md", "file")]
+    assert short(check(root, strict=True)) == [(ERR, "AGENTS.md", "file")]
+    assert main(["agents-check", str(root)]) == 0 and main(["agents-check", str(root), "--strict"]) == 1
+    capsys.readouterr()
+
+
 def test_prose_path_counts_only_under_an_existing_directory(repo):
     root = repo({"AGENTS.md": "Use src/old.py, not client/server.js or Node.js/React.\n", "src/auth.py": ""})
     assert short(check(root)) == [(WARN, "AGENTS.md", "path")]

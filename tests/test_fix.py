@@ -79,6 +79,17 @@ def moved_repo(repo):
 # --- Layer 1: mechanical fixes ---
 
 
+@pytest.mark.parametrize("line, expected", [
+    ("cp src/config.py.bak src/config.py", "cp src/config.py.bak src/settings.py"),
+    ("`src/config.py_old` and `src/config.py`", "`src/config.py_old` and `src/settings.py`"),
+    ("src/config.py-x src/config.py/ src/config.py", "src/config.py-x src/config.py/ src/settings.py"),
+    ("Settings live in src/config.py.", "Settings live in src/settings.py."),
+])
+def test_replace_token_never_touches_a_longer_name(line, expected):
+    assert _replace_token(line, "src/config.py", "src/settings.py") == expected
+    assert _replace_token("only src/config.py.bak here", "src/config.py", "src/settings.py") is None
+
+
 def test_replace_token_keeps_alignment_and_whole_paths():
     assert _replace_token("./scripts/seed_db.sh      # data", "./scripts/seed_db.sh", "./scripts/seed.sh") == \
         "./scripts/seed.sh         # data"
@@ -363,3 +374,18 @@ def test_anthropic_provider(monkeypatch):
     assert body["model"] == "claude-opus-5-5" and body["fallbacks"] == "default" and "temperature" not in body
     assert body["output_config"]["format"]["schema"]["required"] == ["section", "summary", "changed"]
     assert "server-side-fallback-2026-07-01" in headers["anthropic-beta"]
+
+
+def test_verify_all_current_leaves_ai_edits_to_a_person(repo, capsys, monkeypatch):
+    model = FakeModel({"section": "## Auth\n\nLogin: `src/auth.py`, 7-day tokens.\n", "summary": "x", "changed": True})
+    plan = drifted_repo(repo).plan(provider=model)
+    apply(plan, repo.root, NOW)
+    assert repo.units()["AGENTS.md#Auth"].reason == "unverified:generated"
+    monkeypatch.chdir(repo.root)
+    assert main(["verify", "--all-current", "--by", "human:ivan", "--at", "2026-10-22T13:00:00Z"]) == 0
+    err = capsys.readouterr().err
+    assert "AGENTS.md#Other verified by human:ivan" in err and "AGENTS.md#Auth verified" not in err
+    assert "skipped 1 edited by a tool or a model (AGENTS.md#Auth): read each and confirm it with okf verify" in err
+    assert repo.units(now=datetime(2026, 10, 23, tzinfo=timezone.utc))["AGENTS.md#Auth"].level == "unverified"
+    assert main(["verify", "AGENTS.md#Auth", "--by", "human:ivan", "--at", "2026-10-22T14:00:00Z"]) == 0
+    assert repo.units(now=datetime(2026, 10, 23, tzinfo=timezone.utc))["AGENTS.md#Auth"].level == "human-verified"

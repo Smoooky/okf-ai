@@ -171,6 +171,9 @@ def test_shallow_clone_has_no_dates_and_warns(repo, tmp_path, capsys):
     assert main(["trust", str(shallow)]) == 0
     err = capsys.readouterr().err
     assert "shallow" in err and "fetch-depth: 0" in err
+    assert main(["trust", str(shallow), "--json"]) == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["summary"]["history"] == "shallow" and "fetch-depth: 0" in data["warnings"][0]
 
 
 def test_shallow_base_error_suggests_fetch_depth(repo, tmp_path):
@@ -183,6 +186,26 @@ def test_shallow_base_error_suggests_fetch_depth(repo, tmp_path):
     subprocess.run(["git", "checkout", "-q", "feature"], cwd=shallow, check=True, capture_output=True)
     with pytest.raises(Exception, match="fetch-depth: 0"):
         merge_base(shallow, "origin/main")
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="bash is not installed")
+@pytest.mark.parametrize("env, drafts", [
+    ({}, False),
+    ({"ANTHROPIC_API_KEY": "k"}, True),
+    ({"OKF_LLM_API_KEY": "k"}, False),  # okf fix --draft also needs the endpoint and the model
+    ({"OKF_LLM_API_KEY": "k", "OKF_LLM_BASE_URL": "http://llm", "OKF_LLM_MODEL": "m"}, True),
+])
+def test_workflow_asks_for_drafts_only_with_a_usable_key(tmp_path, env, drafts):
+    workflow = yaml.safe_load((REPO_ROOT / ".github/workflows/okf.yml").read_text(encoding="utf-8"))
+    step = next(s for s in workflow["jobs"]["knowledge"]["steps"] if s.get("name") == "okf fix")
+    script = 'okf() { echo "okf $*"; }\n' + step["run"]
+    keys = ("ANTHROPIC_API_KEY", "OKF_LLM_API_KEY", "OKF_LLM_BASE_URL", "OKF_LLM_MODEL")
+    clean = {k: v for k, v in os.environ.items() if k not in keys}
+    bash = shutil.which("bash")  # a full path: on Windows a bare "bash" starts WSL, not Git Bash
+    subprocess.run([bash, "-c", script], cwd=tmp_path, check=True, capture_output=True,
+                   env={**clean, "OKF_REPO": ".", "OKF_SINCE_ARGS": "", **env})
+    assert ("--draft" in (tmp_path / "fix.diff").read_text()) is drafts
+    assert ("LLM drafts skipped" in (tmp_path / "fix-summary.txt").read_text()) is not drafts
 
 
 def test_workflow_fetches_the_whole_history():
