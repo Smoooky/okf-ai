@@ -270,11 +270,16 @@
 - THEN находка — ERROR, код выхода 1
 
 ### Requirement: Нечитаемый файл инструкций
-Команда SHALL выводить ERROR `file` с сообщением `Cannot read file as UTF-8 text: …` и возвращать код выхода 1, если файл инструкций не читается как UTF-8, независимо от `--strict`.
+Команда SHALL выводить находку `file` с сообщением `Cannot read file as UTF-8 text: …`, если файл инструкций не читается как UTF-8: WARNING с кодом выхода 0 по умолчанию и ERROR с кодом выхода 1 с `--strict`.
 
 #### Scenario: Бинарный CLAUDE.md
 - GIVEN `CLAUDE.md` не является текстом UTF-8
 - WHEN запускается `okf agents-check`
+- THEN выводится WARNING `file` и код выхода 0
+
+#### Scenario: Бинарный CLAUDE.md в строгом режиме
+- GIVEN `CLAUDE.md` не является текстом UTF-8
+- WHEN запускается `okf agents-check --strict`
 - THEN выводится ERROR `file` и код выхода 1
 
 ### Requirement: Проверка набора изменений

@@ -77,12 +77,17 @@ Action MUST NOT коммитить, пушить или открывать pull 
 - THEN дифф правки показан в job summary блоком `diff`, а ветка PR не изменилась
 
 ### Requirement: Черновики LLM только с секретом
-Workflow SHALL запускать `okf fix --draft`, только если в репозитории задан секрет `ANTHROPIC_API_KEY` или `OKF_LLM_API_KEY` (с переменными `OKF_LLM_BASE_URL` и `OKF_LLM_MODEL`), а иначе дописывать в отчёт строку `LLM drafts skipped: no ANTHROPIC_API_KEY or OKF_LLM_API_KEY secret.`.
+Workflow SHALL запускать `okf fix --draft`, только если задан секрет `ANTHROPIC_API_KEY` или заданы все три `OKF_LLM_API_KEY`, `OKF_LLM_BASE_URL` и `OKF_LLM_MODEL`, а иначе дописывать в отчёт строку, начинающуюся с `LLM drafts skipped: set`.
 
 #### Scenario: Секрета нет
 - GIVEN в репозитории не заданы секреты LLM
 - WHEN выполняется шаг `okf fix`
 - THEN показываются только механические правки и строка `LLM drafts skipped: …`
+
+#### Scenario: Задан только ключ OKF_LLM_API_KEY
+- GIVEN задан секрет `OKF_LLM_API_KEY`, но не заданы `OKF_LLM_BASE_URL` и `OKF_LLM_MODEL`
+- WHEN выполняется шаг `okf fix`
+- THEN `--draft` не добавляется, в отчёте строка `LLM drafts skipped: set …`
 
 #### Scenario: PR из форка
 - GIVEN pull request из форка, которому GitHub не передаёт секреты

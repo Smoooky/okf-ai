@@ -156,3 +156,8 @@
 - GIVEN `gh` не установлен или не авторизован
 - WHEN запускается `okf scan --find 50`
 - THEN код выхода 2 и сообщение `finding repositories needs the GitHub CLI signed in (gh auth login); or write repos.txt by hand, one owner/repo per line`
+
+#### Scenario: Неверное число в --find
+- GIVEN любой из вызовов `okf scan --find 0`, `okf scan --find -5`, `okf scan --find abc`
+- WHEN команда запускается
+- THEN код выхода 2 и сообщение об ошибке аргумента, без падения с трассировкой

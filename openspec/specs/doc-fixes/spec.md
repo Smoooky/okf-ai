@@ -39,6 +39,12 @@
 - THEN строка становится ``see `lib/a.py` and `src/a.pyc` ``
 - AND строка `vendor/src/a.py` не меняется
 
+#### Scenario: Более длинный путь стоит в строке первым
+- GIVEN строка ``backup `src/config.py.bak`, real `src/config.py` ``, `src/config.py` переехал в `src/settings.py`
+- WHEN запускается `okf fix`
+- THEN строка становится ``backup `src/config.py.bak`, real `src/settings.py` ``
+- AND пути вида `src/config.py_old` и `src/config.py-x` тоже не меняются, а точка в конце предложения после пути продолжением имени не считается
+
 #### Scenario: Путь от корня во вложенной инструкции
 - GIVEN `packages/api/AGENTS.md` упоминает `scripts/start.sh` (от своей папки) и `/docs/api.md` (от корня), файлы переехали в `packages/api/bin/start.sh` и `docs/reference/api.md`
 - WHEN запускается `okf fix`
