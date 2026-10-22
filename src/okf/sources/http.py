@@ -12,11 +12,14 @@ part of a message: errors name the HTTP status and the path, nothing else.
 from __future__ import annotations
 
 import base64
+import email.utils
 import json
+import math
 import socket
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Mapping
 from urllib.parse import parse_qsl, urlsplit
@@ -25,6 +28,7 @@ from okf import __version__
 from okf.sources.base import Unavailable
 
 RETRY_STATUSES = {429, 502, 503, 504}
+MAX_PAUSE = 30.0
 AUTH_HELP = "check OKF_ATLASSIAN_EMAIL and OKF_ATLASSIAN_TOKEN (Cloud) or OKF_ATLASSIAN_PAT (Server/DC)"
 
 
@@ -49,21 +53,13 @@ class Http:
             raise Unavailable(self._down[parts.netloc])
         request = urllib.request.Request(url, headers={"Accept": "application/json",
                                                        "User-Agent": f"okf-ai/{__version__}", **(headers or {})})
-        for attempt in range(self.retries + 1):
-            try:
-                with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                    body = response.read()
-                break
-            except urllib.error.HTTPError as exc:
-                if exc.code in RETRY_STATUSES and attempt < self.retries:
-                    self.sleep(_backoff(exc.headers.get("Retry-After"), attempt))
-                    continue
-                raise Unavailable(status_message(exc.code, where, attempt + 1)) from None
-            except (urllib.error.URLError, socket.timeout, TimeoutError, OSError) as exc:
-                reason = getattr(exc, "reason", exc)
-                why = "timed out" if isinstance(reason, (socket.timeout, TimeoutError)) else "cannot connect"
-                self._down[parts.netloc] = f"{parts.hostname} {why}"
-                raise Unavailable(self._down[parts.netloc]) from None
+        try:
+            body = fetch(request, self.timeout, self.retries, self.sleep)
+        except HttpFailure as failure:
+            if failure.status is not None:
+                raise Unavailable(status_message(failure.status, where, failure.tries)) from None
+            self._down[parts.netloc] = f"{parts.hostname} {'timed out' if failure.timed_out else 'cannot connect'}"
+            raise Unavailable(self._down[parts.netloc]) from None
         try:
             return json.loads(body.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
@@ -115,8 +111,49 @@ def atlassian_headers(env: Mapping[str, str]) -> dict[str, str]:
     return {}
 
 
-def _backoff(retry_after: str | None, attempt: int) -> float:
-    try:
-        return min(max(float(retry_after), 0.0), 30.0)
-    except (TypeError, ValueError):
+class HttpFailure(Exception):
+    """A request that did not succeed: an HTTP status (after the retries), or no answer at all."""
+
+    def __init__(self, status: int | None, tries: int, reason: BaseException | None = None):
+        super().__init__(status)
+        self.status, self.tries, self.reason = status, tries, reason
+
+    @property
+    def timed_out(self) -> bool:
+        return isinstance(self.reason, (socket.timeout, TimeoutError))
+
+
+def fetch(request: urllib.request.Request, timeout: float, retries: int = 3,
+          sleep: Callable[[float], None] = time.sleep) -> bytes:
+    """The body of a successful answer. 429 and 502-504 are retried `retries` times, waiting as
+    Retry-After asks (at most 30 s) or 1, 2, 4 s; every other failure raises HttpFailure at once.
+    Connectors and okf notify both send through here."""
+    for attempt in range(retries + 1):
+        try:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                return response.read()
+        except urllib.error.HTTPError as exc:
+            if exc.code in RETRY_STATUSES and attempt < retries:
+                sleep(retry_pause(exc.headers.get("Retry-After"), attempt))
+                continue
+            raise HttpFailure(exc.code, attempt + 1) from None
+        except (urllib.error.URLError, socket.timeout, TimeoutError, OSError) as exc:
+            raise HttpFailure(None, attempt + 1, getattr(exc, "reason", exc)) from None
+    raise HttpFailure(None, retries + 1)  # not reached: the last attempt returns or raises
+
+
+def retry_pause(retry_after: str | None, attempt: int) -> float:
+    """Seconds to wait: Retry-After (seconds or an HTTP date) clamped to 0..30, else 2**attempt."""
+    seconds = None
+    if retry_after:
+        try:
+            seconds = float(retry_after)
+        except ValueError:
+            try:
+                when = email.utils.parsedate_to_datetime(retry_after)
+                seconds = (when - datetime.now(when.tzinfo or timezone.utc)).total_seconds()
+            except (TypeError, ValueError, IndexError):
+                seconds = None
+    if seconds is None or not math.isfinite(seconds):
         return float(2 ** attempt)
+    return min(max(seconds, 0.0), MAX_PAUSE)

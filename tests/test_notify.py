@@ -140,3 +140,10 @@ def test_notify_job_runs_on_schedule_only_with_a_webhook(workflow):
     assert all(step["if"] == "env.OKF_SLACK_WEBHOOK != '' || env.OKF_TEAMS_WEBHOOK != ''" for step in job["steps"])
     assert job["env"]["OKF_SLACK_WEBHOOK"] == "${{ secrets.OKF_SLACK_WEBHOOK }}"
     assert data["jobs"]["knowledge"]["if"] == "github.event_name != 'schedule'"
+
+
+def test_a_negative_retry_after_is_clamped(webhook):
+    hook = webhook([(429, {"Retry-After": "-5"}), (503, {"Retry-After": "soon"}), (200, {})])
+    pauses = []
+    send(hook.url, {"text": "hi"}, sleep=pauses.append)  # was ValueError: sleep length must be non-negative
+    assert pauses == [0.0, 2.0] and len(hook.posts) == 3

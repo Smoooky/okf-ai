@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import time
-import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -20,6 +19,7 @@ from pathlib import Path
 import yaml
 
 from okf import __version__
+from okf.sources.http import HttpFailure, fetch
 from okf.trust import TrustMap, Unit, _relative
 
 NOBODY = "nobody yet"
@@ -115,20 +115,9 @@ def send(url: str, message: dict, retries: int = 3, sleep=time.sleep, timeout: f
     data = json.dumps(message, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(url, data=data, method="POST", headers={
         "Content-Type": "application/json; charset=utf-8", "User-Agent": f"okf-ai/{__version__}"})
-    for attempt in range(retries + 1):
-        try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                response.read()
-            return
-        except urllib.error.HTTPError as exc:
-            if exc.code in (429, 502, 503, 504) and attempt < retries:
-                try:
-                    pause = min(float(exc.headers.get("Retry-After")), 30.0)
-                except (TypeError, ValueError):
-                    pause = float(2 ** attempt)
-                sleep(pause)
-                continue
-            raise NotifyError(f"the webhook answered HTTP {exc.code}") from None
-        except (urllib.error.URLError, OSError) as exc:
-            reason = getattr(exc, "reason", exc)
-            raise NotifyError(f"cannot reach the webhook: {type(reason).__name__}") from None
+    try:
+        fetch(request, timeout, retries, sleep)
+    except HttpFailure as failure:
+        if failure.status is not None:
+            raise NotifyError(f"the webhook answered HTTP {failure.status}") from None
+        raise NotifyError(f"cannot reach the webhook: {type(failure.reason).__name__}") from None

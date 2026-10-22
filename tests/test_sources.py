@@ -389,3 +389,13 @@ def test_a_new_connector_is_one_class_and_one_line(make_bundle, monkeypatch, tmp
     env = {"OKF_MYWIKI_URL": "https://wiki.example", "OKF_SOURCES_FIXTURES": str(tmp_path)}
     [unit] = build_map(root, History(None, NOW), now=NOW, sources=registry(env)).units
     assert unit.message == "wiki page 7 changed 2026-10-10, last verified 2026-09-01 by human:a"
+
+
+@pytest.mark.parametrize("value, attempt, expected", [
+    ("2", 0, 2.0), ("-5", 0, 0.0), ("100", 0, 30.0), ("abc", 1, 2.0), ("nan", 2, 4.0), ("inf", 0, 1.0),
+    (None, 2, 4.0), ("Wed, 21 Oct 2015 07:28:00 GMT", 0, 0.0),
+])
+def test_retry_pause_is_clamped(value, attempt, expected):
+    from okf.sources.http import retry_pause
+
+    assert retry_pause(value, attempt) == expected
