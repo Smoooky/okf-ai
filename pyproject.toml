@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "okf-ai"
 version = "0.1.0"
-description = "CLI tools for Open Knowledge Format (OKF v0.2) bundles: validator, AGENTS.md router, stale detector"
+description = "Keep instructions for AI agents (AGENTS.md, CLAUDE.md, Cursor rules) and OKF v0.2 knowledge in step with the code"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = ["PyYAML>=6.0"]

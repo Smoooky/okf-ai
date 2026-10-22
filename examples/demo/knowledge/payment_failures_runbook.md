@@ -10,7 +10,7 @@ verified:
 stale_after: 2027-01-15T00:00:00Z
 sources:
   - id: billing-code
-    resource: /src/billing.py
+    resource: ../src/billing.py
     title: Модуль биллинга
   - id: oncall-wiki
     resource: https://wiki.wheelo.example/oncall/payments

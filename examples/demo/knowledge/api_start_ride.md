@@ -10,7 +10,7 @@ verified:
 stale_after: 2026-11-10T00:00:00Z
 sources:
   - id: rides-code
-    resource: /src/rides.py
+    resource: ../src/rides.py
     title: Обработчик POST /rides
 ---
 

@@ -9,7 +9,7 @@ verified: { by: human:maria_backend, at: 2026-10-05T12:30:00Z }
 stale_after: 2027-04-05T00:00:00Z
 sources:
   - id: billing-code
-    resource: /src/billing.py
+    resource: ../src/billing.py
     title: Модуль биллинга
 ---
 

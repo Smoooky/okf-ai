@@ -1,0 +1,11 @@
+{
+  "name": "wheelo-backend",
+  "private": true,
+  "description": "Demo service for okf-ai: JS tooling around a Python backend",
+  "scripts": {
+    "dev": "uvicorn src.app:app --reload --port 8000",
+    "test": "pytest tests",
+    "lint": "ruff check src tests",
+    "docs:check": "okf validate knowledge --strict && okf agents-check ."
+  }
+}

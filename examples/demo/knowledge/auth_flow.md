@@ -10,7 +10,7 @@ verified:
 stale_after: 2027-04-19T00:00:00Z
 sources:
   - id: auth-code
-    resource: /src/auth.py
+    resource: ../src/auth.py
     title: Модуль авторизации
 ---
 

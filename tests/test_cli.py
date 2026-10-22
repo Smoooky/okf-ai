@@ -72,7 +72,7 @@ def test_github_format_escapes_workflow_commands():
 @pytest.mark.parametrize("strict", [[], ["--strict"]])
 def test_demo_bundle_is_clean(capsys, monkeypatch, strict):
     monkeypatch.chdir(REPO_ROOT)
-    code, out, _ = run(capsys, "validate", "examples/demo", *strict)
+    code, out, _ = run(capsys, "validate", "examples/demo/knowledge", *strict)
     assert (code, out) == (0, [])
 
 
@@ -135,7 +135,7 @@ def test_broken_bundle_strict_rules(capsys, monkeypatch):
 
 def test_demo_agents_md_is_up_to_date(capsys, monkeypatch):
     monkeypatch.chdir(REPO_ROOT)
-    code, out, _ = run(capsys, "agents", "examples/demo", "--check", "--now", "2026-10-22")
+    code, out, _ = run(capsys, "agents", "examples/demo/knowledge", "--check", "--now", "2026-10-22")
     assert code == 0, out
 
 
@@ -168,12 +168,12 @@ def test_generated_agents_md_validates_as_okf_concept(make_bundle, capsys):
 def test_stale_with_changed_files(capsys, monkeypatch):
     monkeypatch.chdir(REPO_ROOT)
     code, out, err = run(
-        capsys, "stale", "examples/demo", "--changed", "examples/demo/src/auth.py",
+        capsys, "stale", "examples/demo/knowledge", "--changed", "examples/demo/src/auth.py",
         "--repo-root", ".", "--now", "2026-10-22",
     )
     assert code == 0
     assert out == [
-        "[WARNING] examples/demo/auth_flow.md: sources: Source /src/auth.py changed (examples/demo/src/auth.py); "
+        "[WARNING] examples/demo/knowledge/auth_flow.md: sources: Source ../src/auth.py changed (examples/demo/src/auth.py); "
         "document may be outdated, ask human:teamlead_ivan to review it"
     ]
     assert "1 documents may be outdated" in err
@@ -182,18 +182,18 @@ def test_stale_with_changed_files(capsys, monkeypatch):
 def test_stale_reads_changed_files_from_stdin(capsys, monkeypatch):
     monkeypatch.chdir(REPO_ROOT)
     monkeypatch.setattr(sys, "stdin", io.StringIO("examples/demo/src/billing.py\n"))
-    _, out, _ = run(capsys, "stale", "examples/demo", "--changed", "-", "--repo-root", ".", "--now", "2026-10-22")
+    _, out, _ = run(capsys, "stale", "examples/demo/knowledge", "--changed", "-", "--repo-root", ".", "--now", "2026-10-22")
     assert sorted(line.split(": ")[0] for line in out) == [
-        "[WARNING] examples/demo/billing_service.md",
-        "[WARNING] examples/demo/payment_failures_runbook.md",
+        "[WARNING] examples/demo/knowledge/billing_service.md",
+        "[WARNING] examples/demo/knowledge/payment_failures_runbook.md",
     ]
 
 
 def test_stale_marks_expired_documents(capsys, monkeypatch):
     monkeypatch.chdir(REPO_ROOT)
-    _, out, _ = run(capsys, "stale", "examples/demo", "--repo-root", ".", "--now", "2026-11-10T00:00:00Z")
+    _, out, _ = run(capsys, "stale", "examples/demo/knowledge", "--repo-root", ".", "--now", "2026-11-10T00:00:00Z")
     assert out == [
-        "[WARNING] examples/demo/api_start_ride.md: stale_after: 2026-11-10T00:00:00Z has passed "
+        "[WARNING] examples/demo/knowledge/api_start_ride.md: stale_after: 2026-11-10T00:00:00Z has passed "
         "(now 2026-11-10T00:00:00Z); document is stale, ask human:maria_backend to review it"
     ]
 
@@ -207,7 +207,7 @@ def test_bad_now_is_a_usage_error(capsys):
 @pytest.mark.skipif(shutil.which("git") is None, reason="git is not installed")
 def test_stale_bad_base_ref_exits_2(capsys, monkeypatch):
     monkeypatch.chdir(REPO_ROOT)
-    code, _, err = run(capsys, "stale", "examples/demo", "--base", "no-such-ref-okf")
+    code, _, err = run(capsys, "stale", "examples/demo/knowledge", "--base", "no-such-ref-okf")
     assert code == 2 and "git" in err
 
 
@@ -217,3 +217,57 @@ def test_module_entry_point():
         env={**os.environ, "PYTHONPATH": str(REPO_ROOT / "src")},
     )
     assert result.returncode == 0 and result.stdout.startswith("okf ")
+
+
+# --- okf agents-check ---
+
+
+DEMO_INSTRUCTIONS = [
+    '[WARNING] examples/demo/AGENTS.md: command: "./scripts/seed_db.sh" does not exist (line 14)',
+    '[WARNING] examples/demo/CLAUDE.md: command: "npm run test:unit": no script "test:unit" in package.json (line 6)',
+    "[WARNING] examples/demo/CLAUDE.md: consistency: Instructions for different agents disagree: "
+    'AGENTS.md runs "npm test", CLAUDE.md runs "npm run test:unit" (line 6)',
+]
+
+
+def test_agents_check_demo(capsys, monkeypatch):
+    monkeypatch.chdir(REPO_ROOT)
+    code, out, err = run(capsys, "agents-check", "examples/demo")
+    assert (code, out) == (0, DEMO_INSTRUCTIONS)
+    assert "okf agents-check: 4 instruction files" in err and "0 errors, 3 warnings" in err
+
+
+def test_agents_check_strict_fails(capsys, monkeypatch):
+    monkeypatch.chdir(REPO_ROOT)
+    code, out, _ = run(capsys, "agents-check", "examples/demo", "--strict")
+    assert code == 1
+    assert [line.split(": ")[1] for line in out] == ["command", "command", "consistency"]
+    assert out[0].startswith("[ERROR] ") and out[2].startswith("[WARNING] ")
+
+
+def test_agents_check_with_changed_files(capsys, monkeypatch):
+    monkeypatch.chdir(REPO_ROOT)
+    _, out, _ = run(capsys, "agents-check", "examples/demo", "--changed", "examples/demo/src/config.py",
+                    "--repo-root", ".")
+    assert [line for line in out if line not in DEMO_INSTRUCTIONS] == [
+        '[WARNING] examples/demo/AGENTS.md: path: "src/config.py" changed in this change; '
+        "the instruction may be outdated (line 22)",
+        '[WARNING] examples/demo/CLAUDE.md: path: "src/config.py" changed in this change; '
+        "the instruction may be outdated (line 8)",
+    ]
+
+
+def test_agents_check_fixed_instructions_are_clean(make_bundle, capsys):
+    demo = REPO_ROOT / "examples" / "demo"
+    root = make_bundle({})
+    shutil.copytree(demo, root, dirs_exist_ok=True)
+    shutil.copy(REPO_ROOT / "examples/demo-pr/AGENTS.fixed.md", root / "AGENTS.md")
+    shutil.copy(REPO_ROOT / "examples/demo-pr/CLAUDE.fixed.md", root / "CLAUDE.md")
+    (root / "src/config.py").rename(root / "src/settings.py")
+    code, out, _ = run(capsys, "agents-check", str(root), "--strict")
+    assert (code, out) == (0, [])
+
+
+def test_agents_check_missing_directory(tmp_path, capsys):
+    code, _, err = run(capsys, "agents-check", str(tmp_path / "nope"))
+    assert code == 2 and "not found" in err

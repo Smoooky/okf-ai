@@ -12,7 +12,7 @@ sources:
     resource: https://wiki.wheelo.example/legal/personal-data
     title: Требования юристов
   - id: schema
-    resource: /src/schema.sql
+    resource: ../src/schema.sql
     title: Схема БД
 ---
 

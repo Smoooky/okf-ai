@@ -5,22 +5,16 @@ from __future__ import annotations
 import fnmatch
 import os
 import re
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import unquote
 
 from okf import schema
-from okf.bundle import Bundle, Document
+from okf.bundle import SCHEME_RE, Bundle, Document
 from okf.report import INFO, WARNING, Issue
 
 # https://github.com/<owner>/<repo>/blob/<ref>/<path>: the file is <path> in this repository.
 _GITHUB_FILE_RE = re.compile(r"^https?://github\.com/[^/]+/[^/]+/(?:blob|tree)/[^/]+/(?P<path>[^?#]+)")
-_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*:")
-
-
-class GitError(RuntimeError):
-    pass
 
 
 def find_stale(bundle: Bundle, changed: list[str], repo_root: Path, now: datetime) -> list[Issue]:
@@ -78,7 +72,7 @@ def resource_paths(resource: str, doc: Document, bundle_root: Path, repo_root: P
     match = _GITHUB_FILE_RE.match(resource)
     if match:
         return [normalize_repo_path(unquote(match.group("path")))]
-    if _SCHEME_RE.match(resource):
+    if SCHEME_RE.match(resource):
         return []
     path = unquote(resource.split("#", 1)[0].split("?", 1)[0]).strip()
     if not path:
@@ -126,29 +120,3 @@ def _ask(doc: Document) -> str:
 
 def _utc(moment: datetime) -> str:
     return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def git_toplevel(path: Path) -> Path | None:
-    try:
-        return Path(_git(["rev-parse", "--show-toplevel"], cwd=path).strip())
-    except GitError:
-        return None
-
-
-def git_changed_files(repo_root: Path, base: str) -> list[str]:
-    """Files changed since the merge base with `base`, including uncommitted changes."""
-    merge_base = _git(["merge-base", base, "HEAD"], cwd=repo_root).strip()
-    output = _git(["diff", "--name-only", "--no-renames", "-z", merge_base], cwd=repo_root)
-    return [path for path in output.split("\0") if path]
-
-
-def _git(args: list[str], cwd: Path) -> str:
-    try:
-        result = subprocess.run(
-            ["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8", check=False
-        )
-    except OSError as exc:
-        raise GitError(f"cannot run git: {exc}") from exc
-    if result.returncode != 0:
-        raise GitError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
-    return result.stdout

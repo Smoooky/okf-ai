@@ -1,0 +1,742 @@
+"""`okf agents-check`: keep instructions for AI agents in step with the code.
+
+Finds AGENTS.md, CLAUDE.md, Cursor rules and Copilot instructions, pulls out the
+paths and commands they mention and checks them against the repository: the path
+exists, `npm run X` has a script X in package.json, `make X` a target X,
+`./scripts/x.sh` is a file. With a change set it also flags instructions that
+mention files the change modified, deleted or renamed, and it compares AGENTS.md
+with CLAUDE.md in the same directory.
+"""
+
+from __future__ import annotations
+
+import glob
+import json
+import os
+import re
+import shlex
+from collections import defaultdict
+from dataclasses import dataclass, field
+from pathlib import Path
+from urllib.parse import unquote
+
+from okf.bundle import CODE_SPAN_RE, LINK_RE, SCHEME_RE
+from okf.git import Change
+from okf.report import ERROR, INFO, WARNING, Issue
+
+SKIP_DIRS = {".git", "node_modules", "__pycache__", "venv", ".venv", "dist", "build", ".tox", ".pytest_cache", ".mypy_cache"}
+VISIBLE_DOT_DIRS = {".cursor", ".github"}  # hidden directories that hold agent rules
+
+SHELL_LANGS = {"", "bash", "sh", "shell", "zsh", "fish", "console", "terminal", "shell-session", "shellsession"}
+RUNNERS = {
+    "npm", "pnpm", "yarn", "bun", "make", "just", "pytest", "py.test", "python", "python3", "py",
+    "uv", "poetry", "pipenv", "node", "deno", "tsx", "ts-node", "bash", "sh", "zsh", "npx", "sudo", "cd",
+}
+LIFECYCLE = {"test": "test", "t": "test", "tst": "test", "start": "start", "stop": "stop", "restart": "restart"}
+PNPM_BUILTINS = {
+    "add", "audit", "bin", "config", "create", "dedupe", "deploy", "dlx", "env", "exec", "fetch", "i", "import",
+    "init", "install", "install-test", "it", "licenses", "link", "list", "ln", "ls", "outdated", "pack", "patch",
+    "patch-commit", "prune", "publish", "rb", "rebuild", "remove", "rm", "root", "server", "setup", "store",
+    "un", "uninstall", "unlink", "up", "update", "upgrade", "why",
+}
+YARN_BUILTINS = {
+    "add", "audit", "autoclean", "bin", "cache", "config", "constraints", "create", "dedupe", "dlx", "exec",
+    "explain", "global", "import", "info", "init", "install", "licenses", "link", "list", "login", "logout", "node",
+    "npm", "outdated", "owner", "pack", "patch", "patch-commit", "plugin", "policies", "publish", "rebuild",
+    "remove", "set", "stage", "tag", "team", "unlink", "unplug", "up", "upgrade", "upgrade-interactive",
+    "version", "versions", "why",
+}
+LOCKFILES = (("pnpm-lock.yaml", "pnpm"), ("yarn.lock", "yarn"), ("bun.lockb", "bun"), ("bun.lock", "bun"),
+             ("package-lock.json", "npm"))
+JS_RUNNERS = ("npm", "pnpm", "yarn", "bun")
+
+_FENCE_RE = re.compile(r"^\s{0,3}(`{3,}|~{3,})\s*([\w+-]*)")
+_PATH_RE = re.compile(r"^(?:\.{1,2}/)?[\w@.\-*]+(?:/[\w@.\-*]*)*$")
+_DOMAIN_RE = re.compile(r"^[\w-]+(?:\.[\w-]+)*\.(?:com|org|net|io|dev|ai|app|co|me|ru|sh|so|gg|xyz|cloud|tech)$", re.I)
+_EXT_RE = re.compile(r"\.[A-Za-z][A-Za-z0-9]{0,7}$")
+_LOCATION_RE = re.compile(r"(?::\d+(?::\d+)?|#L\d+(?:-L?\d+)?)$")  # src/a.py:12, src/a.py#L3-L9
+_IMPORT_RE = re.compile(r"(?<![\w@`/])@((?:\.{1,2}/)?[\w.\-]+(?:/[\w.\-]+)*)")  # CLAUDE.md `@path` imports
+_ENV_RE = re.compile(r"^[A-Za-z_]\w*=")
+_LEADING = "([{<\"'«"
+_TRAILING = ")]}>\"'».,;:!?…"
+
+
+@dataclass(frozen=True)
+class InstructionFile:
+    path: Path
+    scope: Path  # directory its relative paths and commands start from
+
+    @property
+    def name(self) -> str:
+        return self.path.name
+
+
+@dataclass(frozen=True)
+class Mention:
+    kind: str  # "path" or "command"
+    text: str
+    line: int
+    loose: bool = False  # a bare prose path: counts only if its first segment exists
+
+
+@dataclass(frozen=True)
+class Target:
+    """Something a command needs: a package.json script, a make target, a just recipe or a file."""
+
+    kind: str  # "script", "make", "just" or "file"
+    name: str
+    cwd: Path
+    runner: str
+    shorthand: bool = False  # `pnpm dev` rather than `pnpm run dev`
+    makefile: Path | None = None
+
+
+@dataclass
+class _Facts:
+    """What one instruction file says, for comparing AGENTS.md with CLAUDE.md."""
+
+    commands: list[tuple[str, str, str, int]] = field(default_factory=list)  # purpose, key, command, line
+    managers: set[str] = field(default_factory=set)
+    paths: list[tuple[str, str, int]] = field(default_factory=list)  # repo path, as written, line
+
+
+@dataclass
+class Report:
+    issues: list[Issue]
+    files: int
+    paths: int
+    commands: int
+
+
+# --- Finding instruction files ------------------------------------------------
+
+
+def discover(root: Path) -> list[InstructionFile]:
+    found = []
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames[:] = sorted(
+            d for d in dirnames if d not in SKIP_DIRS and (not d.startswith(".") or d in VISIBLE_DOT_DIRS)
+        )
+        for name in sorted(filenames):
+            path = Path(dirpath) / name
+            scope = _scope(path, root)
+            if scope is not None:
+                found.append(InstructionFile(path, scope))
+    return found
+
+
+def _scope(path: Path, root: Path) -> Path | None:
+    if path.name in ("AGENTS.md", "CLAUDE.md", ".cursorrules"):
+        return path.parent
+    if path.name == "copilot-instructions.md" and path.parent.name == ".github":
+        return path.parent.parent
+    parts = path.relative_to(root).parts
+    if path.suffix == ".mdc" and ".cursor" in parts:
+        i = parts.index(".cursor")
+        if parts[i + 1 : i + 2] == ("rules",):
+            return root.joinpath(*parts[:i])
+    return None
+
+
+# --- Pulling paths and commands out of the text --------------------------------
+
+
+def mentions(text: str, claude: bool = False) -> list[Mention]:
+    """Paths and commands an instruction file mentions, with line numbers.
+
+    Commands come from shell code blocks and inline code; paths from inline code,
+    markdown links, CLAUDE.md `@imports` and bare prose words that look like paths.
+    """
+    lines = text.split("\n")
+    first = _front_matter_end(lines)
+    found: list[Mention] = []
+    fence, shell = None, False
+    for number, line in enumerate(lines, 1):
+        if number <= first:
+            continue
+        match = _FENCE_RE.match(line)
+        if fence is not None:
+            if match and match.group(1)[0] == fence[0] and len(match.group(1)) >= len(fence) and not match.group(2):
+                fence = None
+            elif shell:
+                command = _strip_prompt(line)
+                if command:
+                    found.append(Mention("command", command, number))
+            continue
+        if match:
+            fence, shell = match.group(1), match.group(2).lower() in SHELL_LANGS
+            continue
+        found.extend(_prose_mentions(line, number, claude))
+    seen, result = set(), []
+    for mention in found:
+        if (mention.kind, mention.text, mention.line) not in seen:
+            seen.add((mention.kind, mention.text, mention.line))
+            result.append(mention)
+    return result
+
+
+def cursor_globs(text: str) -> list[tuple[str, int]]:
+    """`globs:` patterns from a Cursor .mdc front matter (read by hand: `**/*.ts` is not valid YAML)."""
+    lines = text.split("\n")
+    result = []
+    for number in range(1, _front_matter_end(lines)):
+        match = re.match(r"^globs\s*:\s*(.*)$", lines[number])
+        if match:
+            value = match.group(1).strip().strip("[]")
+            result.extend((p.strip().strip("\"'"), number + 1) for p in value.split(",") if p.strip().strip("\"'"))
+    return result
+
+
+def _prose_mentions(line: str, number: int, claude: bool) -> list[Mention]:
+    found = []
+    for span in CODE_SPAN_RE.finditer(line):
+        content = span.group(0).strip("`").strip()
+        if _is_command(content):
+            found.append(Mention("command", content, number))
+        else:
+            path = _LOCATION_RE.sub("", content)
+            if _path_kind(path, bare=False):
+                found.append(Mention("path", path, number))
+    prose = CODE_SPAN_RE.sub(" ", line)
+    for link in LINK_RE.finditer(prose):
+        target = link.group(1).strip("<>")
+        if target and not target.startswith("#") and not SCHEME_RE.match(target):
+            path = unquote(target.split("#", 1)[0].split("?", 1)[0])
+            if path:
+                found.append(Mention("path", path, number))
+    prose = LINK_RE.sub(" ", prose)
+    if claude:
+        for match in _IMPORT_RE.finditer(prose):
+            if "/" in match.group(1) or _EXT_RE.search(match.group(1)):
+                found.append(Mention("path", match.group(1), number))
+        prose = _IMPORT_RE.sub(" ", prose)
+    for word in prose.split():
+        path = _LOCATION_RE.sub("", word.lstrip(_LEADING).rstrip(_TRAILING))
+        kind = _path_kind(path, bare=True)
+        if kind:
+            found.append(Mention("path", path, number, loose=kind == "loose"))
+    return found
+
+
+def _path_kind(token: str, bare: bool) -> str | None:
+    """"sure" for a path, "loose" for a maybe-path (needs an existing first segment), None otherwise."""
+    if "/" not in token or "://" in token or token.startswith(("/", "~", "@", "-")) or not _PATH_RE.match(token):
+        return None
+    first = next((part for part in token.split("/") if part not in (".", "..")), "")
+    if not first or first.isdigit() or _DOMAIN_RE.match(first):
+        return None
+    if token.startswith(("./", "../")):
+        return "sure"
+    if bare:
+        return "loose"
+    if token.endswith("/") or "*" in token or _EXT_RE.search(token.rstrip("/").rsplit("/", 1)[-1]):
+        return "sure"
+    return "loose"
+
+
+def _is_command(text: str) -> bool:
+    words = text.split()
+    while words and _ENV_RE.match(words[0]):
+        words.pop(0)
+    return bool(words) and (words[0] in RUNNERS or words[0].startswith(("./", "../")))
+
+
+def _strip_prompt(line: str) -> str:
+    text = line.strip()
+    for prompt in ("$ ", "> ", "% ", "PS> "):
+        if text.startswith(prompt):
+            text = text[len(prompt) :]
+            break
+    return "" if text.startswith("#") else text
+
+
+def _front_matter_end(lines: list[str]) -> int:
+    """1-based line number of the closing `---`, 0 without front matter."""
+    if not lines or lines[0].strip() != "---":
+        return 0
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            return i + 1
+    return 0
+
+
+# --- Understanding commands -----------------------------------------------------
+
+
+def split_commands(line: str) -> list[list[str]]:
+    """`a && b | c; d` -> [[a], [b], [c], [d]], each as shell words."""
+    lexer = shlex.shlex(line, posix=True, punctuation_chars=";&|")
+    lexer.whitespace_split = True
+    try:
+        words = list(lexer)
+    except ValueError:
+        words = line.split()
+    groups, current = [], []
+    for word in words:
+        if word and set(word) <= set(";&|"):
+            groups.append(current)
+            current = []
+        else:
+            current.append(word)
+    groups.append(current)
+    return [group for group in groups if group]
+
+
+def analyze(words: list[str], cwd: Path) -> tuple[list[Target], Path]:
+    """What a command needs to exist, and the working directory after it (`cd`)."""
+    words = list(words)
+    while words and _ENV_RE.match(words[0]):
+        words.pop(0)
+    if not words:
+        return [], cwd
+    head, args = words[0], words[1:]
+    if head == "cd":
+        if args and not args[0].startswith(("-", "~", "$")):
+            return [], cwd / args[0]
+        return [], cwd
+    if head in ("sudo", "time", "exec", "env"):
+        return analyze(args, cwd)
+    if head in ("uv", "poetry", "pipenv", "pdm", "rye") and args[:1] == ["run"]:
+        return analyze(args[1:], cwd)[0], cwd
+    if head in JS_RUNNERS:
+        return _js(head, args, cwd), cwd
+    if head == "make":
+        return _make(args, cwd), cwd
+    if head == "just":
+        return _just(args, cwd), cwd
+    if head in ("pytest", "py.test"):
+        return _pytest(args, cwd), cwd
+    if head in ("python", "python3", "py"):
+        return _python(args, cwd), cwd
+    if head in ("node", "deno", "tsx", "ts-node", "bash", "sh", "zsh"):
+        return _script_argument(head, args, cwd), cwd
+    if head.startswith(("./", "../")):
+        return [Target("file", head, cwd, head)], cwd
+    return [], cwd
+
+
+def _js(runner: str, args: list[str], cwd: Path) -> list[Target]:
+    dir_options = {"npm": ("--prefix",), "pnpm": ("-C", "--dir"), "yarn": ("--cwd",), "bun": ("--cwd",)}[runner]
+    rest, i = [], 0
+    while i < len(args):
+        arg = args[i]
+        if arg in ("-w", "-ws", "--workspace", "--workspaces", "--filter", "-F", "-r", "--recursive", "workspace",
+                   "workspaces", "--workspace-root") or arg.startswith(("--filter=", "--workspace=")):
+            return []  # a workspace package: which package.json is not worth guessing
+        if arg in dir_options and i + 1 < len(args):
+            cwd, i = cwd / args[i + 1], i + 2
+            continue
+        if "=" in arg and arg.split("=", 1)[0] in dir_options:
+            cwd, i = cwd / arg.split("=", 1)[1], i + 1
+            continue
+        if arg.startswith("-") and not rest:
+            i += 1
+            continue
+        rest.append(arg)
+        i += 1
+    if not rest:
+        return []  # `yarn`, `pnpm`: install
+    sub = rest[0]
+    if sub in ("run", "run-script", "rum", "urn"):
+        if len(rest) < 2 or rest[1].startswith("-"):
+            return []
+        if runner == "bun" and ("/" in rest[1] or _EXT_RE.search(rest[1])):
+            return [Target("file", rest[1], cwd, runner)]
+        return [Target("script", rest[1], cwd, runner)]
+    if runner == "bun":
+        return []  # bun test, bun install, ... are built in
+    if sub in LIFECYCLE:
+        return [Target("script", LIFECYCLE[sub], cwd, runner)]
+    if runner == "npm" or sub in (PNPM_BUILTINS if runner == "pnpm" else YARN_BUILTINS):
+        return []
+    return [Target("script", sub, cwd, runner, shorthand=True)]
+
+
+def _make(args: list[str], cwd: Path) -> list[Target]:
+    makefile, targets, i = None, [], 0
+    while i < len(args):
+        arg = args[i]
+        if arg in ("-C", "--directory") and i + 1 < len(args):
+            cwd, i = cwd / args[i + 1], i + 2
+        elif arg.startswith("-C") and len(arg) > 2:
+            cwd, i = cwd / arg[2:], i + 1
+        elif arg in ("-f", "--file", "--makefile") and i + 1 < len(args):
+            makefile, i = args[i + 1], i + 2
+        elif arg in ("-o", "-W", "-I") and i + 1 < len(args):
+            i += 2
+        elif arg in ("-j", "-l") and i + 1 < len(args) and args[i + 1].isdigit():
+            i += 2
+        elif arg.startswith("-") or "=" in arg:
+            i += 1
+        else:
+            targets.append(arg)
+            i += 1
+    return [Target("make", t, cwd, "make", makefile=cwd / makefile if makefile else None) for t in targets]
+
+
+def _just(args: list[str], cwd: Path) -> list[Target]:
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg in ("-l", "--list", "--summary", "--show", "-s", "--evaluate", "--init", "--fmt", "--dump",
+                   "--choose", "--edit", "-e", "--variables", "--help", "-h", "--version", "-V"):
+            return []
+        if arg in ("-f", "--justfile", "-d", "--working-directory") and i + 1 < len(args):
+            i += 2
+        elif arg == "--set":
+            i += 3
+        elif arg.startswith("-") or "=" in arg:
+            i += 1
+        else:
+            return [Target("just", arg, cwd, "just")]
+    return []
+
+
+def _pytest(args: list[str], cwd: Path) -> list[Target]:
+    takes_value = {"-k", "-m", "-c", "-p", "-o", "-n", "-W", "--rootdir", "--confcutdir", "--basetemp", "--maxfail",
+                   "--deselect", "--ignore", "--ignore-glob", "--junitxml", "--log-file", "--cov", "--cov-report",
+                   "--tb", "--durations"}
+    targets, i = [], 0
+    while i < len(args):
+        arg = args[i]
+        if arg in takes_value:
+            i += 2
+            continue
+        i += 1
+        if arg.startswith("-"):
+            continue
+        path = re.sub(r"\[.*\]$", "", arg.split("::", 1)[0])
+        if "/" in path or path.endswith(".py"):
+            targets.append(Target("file", path, cwd, "pytest"))
+    return targets
+
+
+def _python(args: list[str], cwd: Path) -> list[Target]:
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "-m":
+            return _pytest(args[i + 2 :], cwd) if args[i + 1 : i + 2] == ["pytest"] else []
+        if arg == "-c":
+            return []
+        if arg in ("-X", "-W", "-Q"):
+            i += 2
+            continue
+        if arg.startswith("-"):  # -u, -O, and the `py -3.12` launcher version
+            i += 1
+            continue
+        return [Target("file", arg, cwd, "python")] if arg.endswith(".py") or "/" in arg else []
+    return []
+
+
+def _script_argument(head: str, args: list[str], cwd: Path) -> list[Target]:
+    for arg in args:
+        if arg in ("-c", "-e", "--eval", "-p", "--print"):
+            return []
+        if not arg.startswith("-"):
+            return [Target("file", arg, cwd, head)] if "/" in arg or _EXT_RE.search(arg) else []
+    return []
+
+
+# --- Checking -----------------------------------------------------------------------
+
+
+class _Repository:
+    """Lookups with caching: nearest package.json, Makefile, justfile."""
+
+    def __init__(self, root: Path):
+        self.root = root
+        self._cache: dict[object, object] = {}
+
+    def nearest(self, start: Path, names: tuple[str, ...]) -> Path | None:
+        directory = Path(os.path.normpath(start))
+        while True:
+            for name in names:
+                if name in self._entries(directory) and (directory / name).is_file():
+                    return directory / name
+            if directory == self.root or directory.parent == directory or self.root not in directory.parents:
+                return None
+            directory = directory.parent
+
+    def show(self, path: Path) -> str:
+        """A path relative to the checked directory, for messages."""
+        return _relative(path, self.root)
+
+    def _entries(self, directory: Path) -> set[str]:
+        """Exact file names (Windows and macOS file systems ignore case)."""
+        key = ("entries", directory)
+        if key not in self._cache:
+            try:
+                self._cache[key] = set(os.listdir(directory))
+            except OSError:
+                self._cache[key] = set()
+        return self._cache[key]
+
+    def package(self, path: Path) -> dict | None:
+        if path not in self._cache:
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                data = None
+            self._cache[path] = data if isinstance(data, dict) else None
+        return self._cache[path]
+
+    def make_targets(self, path: Path) -> tuple[set[str], bool]:
+        """Targets of a Makefile, and whether it may define more (include, pattern rules)."""
+        if path not in self._cache:
+            targets, open_ended = set(), False
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                if re.match(r"^\s*-?s?include\s", line):
+                    open_ended = True
+                match = re.match(r"^([^\s:=#][^:=#]*?)\s*::?(?!=)", line)
+                if match:
+                    for name in match.group(1).split():
+                        if "%" in name or "$" in name:
+                            open_ended = True
+                        targets.add(name)
+            self._cache[path] = (targets, open_ended)
+        return self._cache[path]
+
+    def just_recipes(self, path: Path) -> tuple[set[str], bool]:
+        if path not in self._cache:
+            recipes, open_ended = set(), False
+            for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                if re.match(r"^(import|mod)\b", line):
+                    open_ended = True
+                match = re.match(r"^alias\s+([\w-]+)\s*:=", line) or re.match(r"^@?([A-Za-z_][\w-]*)(?:\s+[^:]*)?:(?!=)", line)
+                if match:
+                    recipes.add(match.group(1))
+            self._cache[path] = (recipes, open_ended)
+        return self._cache[path]
+
+
+def check_repository(root: Path, strict: bool = False, changes: list[Change] | None = None,
+                     git_root: Path | None = None) -> Report:
+    """Check every instruction file under `root`. `changes` paths are relative to `git_root`."""
+    root = root.resolve()
+    git_root = (git_root or root).resolve()
+    repository = _Repository(root)
+    files = discover(root)
+    issues: list[Issue] = []
+    facts: dict[Path, _Facts] = {}
+    paths = commands = 0
+    for instruction in files:
+        file_issues, file_facts, counts = _check_file(instruction, repository, strict, changes, git_root)
+        issues.extend(file_issues)
+        facts[instruction.path] = file_facts
+        paths, commands = paths + counts[0], commands + counts[1]
+    for instruction in files:
+        agents = instruction.path.with_name("AGENTS.md")
+        if instruction.name == "CLAUDE.md" and agents in facts:
+            issues.extend(_compare(facts[agents], facts[instruction.path], instruction.path))
+    return Report(issues, len(files), paths, commands)
+
+
+def _check_file(instruction: InstructionFile, repository: _Repository, strict: bool,
+                changes: list[Change] | None, git_root: Path) -> tuple[list[Issue], _Facts, tuple[int, int]]:
+    issues: list[Issue] = []
+    facts = _Facts()
+    try:
+        text = instruction.path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return [Issue(ERROR, instruction.path, "file", f"Cannot read file as UTF-8 text: {exc}")], facts, (0, 0)
+    problem = ERROR if strict else WARNING
+
+    def report(level: str, kind: str, message: str, line: int) -> None:
+        issues.append(Issue(level, instruction.path, kind, f"{message} (line {line})", line))
+
+    changed = {} if changes is None else _index_changes(changes)
+    instruction_changed = _relative(instruction.path, git_root) in changed
+    found = mentions(text, claude=instruction.name == "CLAUDE.md")
+    counts = [0, 0]
+    for mention in found:
+        if mention.kind == "path":
+            candidates = _path_candidates(mention.text, instruction, repository.root)
+            if mention.loose and not _first_segment_exists(mention.text, candidates):
+                continue
+            counts[0] += 1
+            if "*" in mention.text:
+                if not any(glob.glob(str(c), recursive=True) for c in candidates):
+                    report(problem, "path", f'"{mention.text}" matches no files', mention.line)
+                continue
+            facts.paths.append((_relative(_pick(candidates), repository.root), mention.text, mention.line))
+            _check_reference(f'"{mention.text}"', mention.text, candidates, mention.line, "path", instruction,
+                             changed, instruction_changed, git_root, problem, report)
+            continue
+        counts[1] += 1
+        cwd = instruction.scope
+        for words in split_commands(mention.text):
+            command = " ".join(words)
+            targets, cwd = analyze(words, cwd)
+            for target in targets:
+                if target.kind == "file":
+                    candidates = [target.cwd / target.name, repository.root / target.name]
+                    _check_reference(f'"{command}"', target.name, candidates, mention.line, "command", instruction,
+                                     changed, instruction_changed, git_root, problem, report)
+                    continue
+                message = _check_target(target, command, repository)
+                if message:
+                    report(problem, "command", message, mention.line)
+                if target.kind == "script":
+                    facts.managers.add(target.runner)
+                    family = "script"
+                else:
+                    family = target.kind
+                purpose = re.split(r"[:_\-.\s/]", target.name.lower())[0]
+                facts.commands.append((purpose, f"{family}:{target.name}", command, mention.line))
+    if instruction.path.suffix == ".mdc":
+        for pattern, line in cursor_globs(text):
+            if not glob.glob(pattern, root_dir=instruction.scope, recursive=True):
+                report(problem, "globs", f'"{pattern}" matches no files', line)
+    return issues, facts, (counts[0], counts[1])
+
+
+def _check_reference(subject: str, path: str, candidates: list[Path], line: int, kind: str,
+                     instruction: InstructionFile, changed: dict[str, Change], instruction_changed: bool,
+                     git_root: Path, problem: str, report) -> None:
+    """A file or directory an instruction relies on: does it exist, did the change touch it?"""
+    shown = subject if subject.strip('"') == path else f"{subject}: {path}"
+    relatives = {_relative(c, git_root) for c in candidates}
+    hits = [changed[r] for r in relatives if r in changed]
+    if not any(c.exists() for c in candidates):
+        renamed = next((c for c in hits if c.status in "RC" and c.old_path in relatives), None)
+        if renamed is not None:
+            new = Path(os.path.relpath(git_root / renamed.path, instruction.scope)).as_posix()
+            report(problem, kind, f"{shown} was renamed to {new} in this change", line)
+        elif hits:
+            report(problem, kind, f"{shown} was deleted or renamed in this change", line)
+        else:
+            report(problem, kind, f"{shown} does not exist", line)
+        return
+    touched = [c for c in hits if c.status != "D" and c.path in relatives]
+    if touched:
+        if instruction_changed:
+            report(INFO, kind, f"{shown} changed; the instruction was updated in the same change", line)
+        else:
+            report(WARNING, kind, f"{shown} changed in this change; the instruction may be outdated", line)
+
+
+def _check_target(target: Target, command: str, repository: _Repository) -> str | None:
+    """Why the script, make target or just recipe a command needs is missing, if it is."""
+    if target.kind == "script":
+        package = repository.nearest(target.cwd, ("package.json",))
+        if package is None:
+            return f'"{command}": no package.json found'
+        data = repository.package(package)
+        if data is None:
+            return f'"{command}": {repository.show(package)} is not valid JSON'
+        manager = _package_manager(package.parent, data)
+        if manager and manager[0] != target.runner:
+            return f'"{command}": this project uses {manager[0]} ({manager[1]})'
+        scripts = data.get("scripts") if isinstance(data.get("scripts"), dict) else {}
+        dependencies = {**(data.get("dependencies") or {}), **(data.get("devDependencies") or {})}
+        if target.name in scripts or (target.shorthand and target.name in dependencies):
+            return None
+        if target.name == "start" and (package.parent / "server.js").exists():
+            return None
+        return f'"{command}": no script "{target.name}" in {repository.show(package)}'
+    if target.kind == "make":
+        makefile = target.makefile or repository.nearest(target.cwd, ("GNUmakefile", "makefile", "Makefile"))
+        if makefile is None or not makefile.is_file():
+            return f'"{command}": no Makefile found'
+        targets, open_ended = repository.make_targets(makefile)
+        if target.name in targets or open_ended:
+            return None
+        return f'"{command}": no target "{target.name}" in {repository.show(makefile)}'
+    justfile = repository.nearest(target.cwd, ("justfile", "Justfile", ".justfile"))
+    if justfile is None:
+        return f'"{command}": no justfile found'
+    recipes, open_ended = repository.just_recipes(justfile)
+    if target.name in recipes or open_ended:
+        return None
+    return f'"{command}": no recipe "{target.name}" in {repository.show(justfile)}'
+
+
+def _package_manager(directory: Path, data: dict) -> tuple[str, str] | None:
+    declared = data.get("packageManager")
+    if isinstance(declared, str) and declared:
+        return declared.split("@", 1)[0], '"packageManager" in package.json'
+    for lockfile, manager in LOCKFILES:
+        if (directory / lockfile).exists():
+            return manager, lockfile
+    return None
+
+
+def _compare(agents: _Facts, claude: _Facts, claude_path: Path) -> list[Issue]:
+    """AGENTS.md and CLAUDE.md in one directory should not send agents different ways."""
+    issues = []
+
+    def disagree(message: str, line: int) -> None:
+        issues.append(Issue(WARNING, claude_path, "consistency",
+                            f"Instructions for different agents disagree: {message} (line {line})", line))
+
+    by_purpose_a, by_purpose_c = defaultdict(list), defaultdict(list)
+    for purpose, key, command, line in agents.commands:
+        by_purpose_a[purpose].append((key, command, line))
+    for purpose, key, command, line in claude.commands:
+        by_purpose_c[purpose].append((key, command, line))
+    for purpose in sorted(set(by_purpose_a) & set(by_purpose_c)):
+        a, c = by_purpose_a[purpose], by_purpose_c[purpose]
+        if {key for key, _, _ in a}.isdisjoint(key for key, _, _ in c):
+            disagree(f'AGENTS.md runs "{a[0][1]}", CLAUDE.md runs "{c[0][1]}"', c[0][2])
+
+    if agents.managers and claude.managers and agents.managers.isdisjoint(claude.managers):
+        line = next(line for _, key, _, line in claude.commands if key.startswith("script:"))
+        disagree(f"AGENTS.md uses {', '.join(sorted(agents.managers))}, "
+                 f"CLAUDE.md uses {', '.join(sorted(claude.managers))}", line)
+
+    by_name_a, by_name_c = defaultdict(set), defaultdict(list)
+    for path, written, _ in agents.paths:
+        by_name_a[Path(path).name].add(path)
+    for path, written, line in claude.paths:
+        by_name_c[Path(path).name].append((path, written, line))
+    for name in sorted(set(by_name_a) & set(by_name_c)):
+        mine = by_name_c[name]
+        if by_name_a[name].isdisjoint(path for path, _, _ in mine):
+            other = sorted(by_name_a[name])[0]
+            disagree(f'AGENTS.md mentions "{other}", CLAUDE.md mentions "{mine[0][1]}"', mine[0][2])
+    return issues
+
+
+def _index_changes(changes: list[Change]) -> dict[str, Change]:
+    index = {}
+    for change in changes:
+        index[change.path] = change
+        if change.old_path:
+            index[change.old_path] = change
+    return index
+
+
+def _path_candidates(path: str, instruction: InstructionFile, root: Path) -> list[Path]:
+    if path.startswith("/"):
+        bases = [root]
+    else:
+        bases = [instruction.path.parent, instruction.scope, root]
+    result = []
+    for base in bases:
+        candidate = Path(os.path.normpath(base / path.lstrip("/")))
+        if candidate not in result:
+            result.append(candidate)
+    return result
+
+
+def _first_segment_exists(path: str, candidates: list[Path]) -> bool:
+    depth = len([part for part in path.rstrip("/").split("/") if part not in (".", "")]) - 1
+    for candidate in candidates:
+        first = candidate
+        for _ in range(depth):
+            first = first.parent
+        if first.exists():
+            return True
+    return False
+
+
+def _pick(candidates: list[Path]) -> Path:
+    return next((c for c in candidates if c.exists()), candidates[0])
+
+
+def _relative(path: Path, root: Path) -> str:
+    try:
+        return Path(os.path.relpath(path, root)).as_posix()
+    except ValueError:  # another drive on Windows
+        return path.as_posix()

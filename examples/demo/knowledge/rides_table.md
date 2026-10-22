@@ -11,7 +11,7 @@ verified:
 stale_after: 2027-03-20T00:00:00Z
 sources:
   - id: schema
-    resource: /src/schema.sql
+    resource: ../src/schema.sql
     title: Схема БД
 ---
 

@@ -101,10 +101,10 @@ class Document:
     def links(self) -> Iterator[tuple[str, int]]:
         """Markdown link targets in the body with their line numbers (code is skipped)."""
         for line, number in _markdown_lines(self.body, self.body_line):
-            line = _CODE_SPAN_RE.sub("", line)
-            for match in _INLINE_LINK_RE.finditer(line):
+            line = CODE_SPAN_RE.sub("", line)
+            for match in LINK_RE.finditer(line):
                 yield match.group(1).strip("<>"), number
-            match = _REF_DEF_RE.match(line)
+            match = REF_DEF_RE.match(line)
             if match:
                 yield match.group(1).strip("<>"), number
 
@@ -124,7 +124,7 @@ class Bundle:
 
     def resolve_link(self, doc: Document, target: str) -> Path | None:
         """Absolute path a local link points to, or None for external links and anchors."""
-        if not target or target.startswith("#") or _SCHEME_RE.match(target):
+        if not target or target.startswith("#") or SCHEME_RE.match(target):
             return None
         path = unquote(target.split("#", 1)[0].split("?", 1)[0])
         if not path:
@@ -187,22 +187,22 @@ def _parse_front_matter(doc: Document) -> None:
         doc.meta = meta
 
 
-_FENCE_RE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
-_CODE_SPAN_RE = re.compile(r"(`+).+?\1")
-_INLINE_LINK_RE = re.compile(
+FENCE_RE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
+CODE_SPAN_RE = re.compile(r"(`+).+?\1")
+LINK_RE = re.compile(
     r"!?\[(?:[^\[\]]|\[[^\[\]]*\])*\]"  # [text], one level of nested brackets allowed
     r"\(\s*(<[^>\n]*>|[^)\s]+)"  # (target
     r"(?:\s+(?:\"[^\"]*\"|'[^']*'|\([^)]*\)))?\s*\)"  # optional "title")
 )
-_REF_DEF_RE = re.compile(r"^\s{0,3}\[(?!\^)[^\]]+\]:\s*(<[^>\n]*>|\S+)")  # footnotes [^id]: are not links
-_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*:")
+REF_DEF_RE = re.compile(r"^\s{0,3}\[(?!\^)[^\]]+\]:\s*(<[^>\n]*>|\S+)")  # footnotes [^id]: are not links
+SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*:")
 
 
 def _markdown_lines(body: str, first_line: int) -> Iterator[tuple[str, int]]:
     """Body lines outside fenced code blocks."""
     fence = None
     for offset, line in enumerate(body.split("\n")):
-        match = _FENCE_RE.match(line)
+        match = FENCE_RE.match(line)
         if fence is None and match:
             fence = match.group(1)
         elif fence is not None:

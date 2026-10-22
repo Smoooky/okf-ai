@@ -6,7 +6,8 @@ import pytest
 
 from conftest import OFFICIAL_BUNDLE, doc, meta
 from okf.bundle import Bundle
-from okf.stale import find_stale, git_changed_files, resource_paths, source_matches
+from okf.git import changed_paths, changes_since
+from okf.stale import find_stale, resource_paths, source_matches
 
 NOW = datetime(2026, 10, 22, 12, 0, tzinfo=timezone.utc)
 
@@ -190,4 +191,4 @@ def test_git_changed_files_against_base(tmp_path):
     _git(repo, "commit", "-q", "-am", "ttl")
     (repo / "src/billing.py").write_text("FEE = 60\n")  # uncommitted change counts too
 
-    assert sorted(git_changed_files(repo, "main")) == ["src/auth.py", "src/billing.py"]
+    assert sorted(changed_paths(changes_since(repo, "main"))) == ["src/auth.py", "src/billing.py"]

@@ -1,0 +1,8 @@
+---
+description: Правила для бэкенда Wheelo
+globs: src/**/*.py
+alwaysApply: false
+---
+
+- Тарифы и холд — в `src/billing.py`; меняй их вместе с тестами в `tests/test_billing.py`.
+- Схема БД — `src/schema.sql`; после изменения запусти `make migrate`.

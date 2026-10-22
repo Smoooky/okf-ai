@@ -1,4 +1,4 @@
-"""Command line: okf validate | agents | stale."""
+"""Command line: okf agents-check | validate | agents | stale."""
 
 from __future__ import annotations
 
@@ -11,8 +11,10 @@ from okf import __version__
 from okf.agents import render_agents
 from okf.bundle import Bundle
 from okf.report import ERROR, INFO, WARNING, Issue, display_path, format_issue
+from okf.git import Change, GitError, changed_paths, changes_since, toplevel
+from okf.instructions import check_repository
 from okf.schema import get_profile
-from okf.stale import GitError, find_stale, git_changed_files, git_toplevel
+from okf.stale import find_stale, normalize_repo_path
 from okf.validate import has_errors, validate_bundle
 from okf.values import parse_now
 
@@ -22,6 +24,11 @@ def main(argv: list[str] | None = None) -> int:
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(errors="replace")
     args = _parser().parse_args(argv)
+    if args.command == "agents-check":
+        if not Path(args.repo).is_dir():
+            print(f"okf: error: directory not found: {args.repo}", file=sys.stderr)
+            return 2
+        return _agents_check(args)
     bundle_dir = Path(args.bundle)
     if not bundle_dir.is_dir():
         print(f"okf: error: bundle directory not found: {args.bundle}", file=sys.stderr)
@@ -30,9 +37,19 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="okf", description="Tools for Open Knowledge Format (OKF v0.2) bundles.")
+    parser = argparse.ArgumentParser(
+        prog="okf", description="Keep instructions for AI agents and OKF v0.2 knowledge in step with the code."
+    )
     parser.add_argument("--version", action="version", version=f"okf {__version__}")
     commands = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
+
+    check = commands.add_parser(
+        "agents-check", help="check AGENTS.md, CLAUDE.md, Cursor and Copilot rules against the code"
+    )
+    check.add_argument("repo", nargs="?", default=".", help="repository or directory to check (default: .)")
+    check.add_argument("--strict", action="store_true", help="report broken paths and commands as errors (exit 1)")
+    _add_changes(check)
+    _add_format(check)
 
     validate = commands.add_parser("validate", help="check the bundle against OKF v0.2")
     validate.add_argument("bundle", help="bundle directory")
@@ -53,16 +70,27 @@ def _parser() -> argparse.ArgumentParser:
 
     stale = commands.add_parser("stale", help="find documents that may be outdated")
     stale.add_argument("bundle", help="bundle directory")
-    stale.add_argument(
-        "--changed", nargs="+", default=[], metavar="FILE",
-        help="changed files, relative to the repository root; '-' reads them from stdin",
-    )
-    stale.add_argument("--base", metavar="REF", help="git ref to diff against, e.g. origin/main")
-    stale.add_argument("--repo-root", help="repository root (default: git top level, else the current directory)")
+    _add_changes(stale)
     _add_now(stale)
     _add_format(stale)
     stale.set_defaults(handler=_stale)
     return parser
+
+
+def _add_changes(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--changed", nargs="+", default=[], metavar="FILE",
+        help="changed files, relative to the repository root; '-' reads them from stdin",
+    )
+    parser.add_argument("--base", metavar="REF", help="git ref to diff against, e.g. origin/main")
+    parser.add_argument("--repo-root", help="repository root (default: git top level, else the current directory)")
+
+
+def _changed_files(args: argparse.Namespace) -> list[str]:
+    changed = []
+    for item in args.changed:
+        changed.extend(sys.stdin.read().splitlines() if item == "-" else [item])
+    return [path for path in changed if path.strip()]
 
 
 def _add_format(parser: argparse.ArgumentParser) -> None:
@@ -80,6 +108,30 @@ def _add_now(parser: argparse.ArgumentParser) -> None:
 
 def _now(args: argparse.Namespace) -> datetime:
     return args.now or datetime.now(timezone.utc)
+
+
+def _agents_check(args: argparse.Namespace) -> int:
+    root = Path(args.repo).resolve()
+    git_root = Path(args.repo_root).resolve() if args.repo_root else toplevel(root) or Path.cwd()
+    changes = None
+    if args.changed or args.base:
+        changes = [Change("M", normalize_repo_path(path)) for path in _changed_files(args)]
+        if args.base:
+            try:
+                changes.extend(changes_since(git_root, args.base))
+            except GitError as exc:
+                print(f"okf: error: {exc}", file=sys.stderr)
+                return 2
+    report = check_repository(root, args.strict, changes, git_root)
+    _print(report.issues, args.format)
+    errors = sum(issue.level == ERROR for issue in report.issues)
+    warnings = sum(issue.level == WARNING for issue in report.issues)
+    print(
+        f"okf agents-check: {report.files} instruction files, {report.paths} paths, {report.commands} commands, "
+        f"{errors} errors, {warnings} warnings",
+        file=sys.stderr,
+    )
+    return 1 if errors else 0
 
 
 def _validate(args: argparse.Namespace, bundle: Bundle) -> int:
@@ -117,13 +169,11 @@ def _agents(args: argparse.Namespace, bundle: Bundle) -> int:
 
 
 def _stale(args: argparse.Namespace, bundle: Bundle) -> int:
-    repo_root = Path(args.repo_root) if args.repo_root else git_toplevel(bundle.root) or Path.cwd()
-    changed = []
-    for item in args.changed:
-        changed.extend(sys.stdin.read().splitlines() if item == "-" else [item])
+    repo_root = Path(args.repo_root) if args.repo_root else toplevel(bundle.root) or Path.cwd()
+    changed = _changed_files(args)
     if args.base:
         try:
-            changed.extend(git_changed_files(repo_root, args.base))
+            changed.extend(changed_paths(changes_since(repo_root, args.base)))
         except GitError as exc:
             print(f"okf: error: {exc}", file=sys.stderr)
             return 2

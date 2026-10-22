@@ -9,7 +9,7 @@ verified: { by: human:teamlead_ivan, at: 2026-10-01T09:30:00Z }
 stale_after: 2027-01-01T00:00:00Z
 sources:
   - id: config
-    resource: /src/config.py
+    resource: ../src/config.py
     title: Настройки сервиса
 ---
 
