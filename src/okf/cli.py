@@ -1,4 +1,4 @@
-"""Command line: okf trust | fix | verify | import | sources | agents-check | stale | validate | agents | scan."""
+"""Command line: okf trust | fix | verify | view | import | sources | agents-check | stale | validate | agents | scan."""
 
 from __future__ import annotations
 
@@ -12,7 +12,9 @@ from okf import __version__
 from okf.agents import render_agents
 from okf.bundle import Bundle
 from okf.report import ERROR, INFO, WARNING, Issue, display_path, format_issue
-from okf.git import SHALLOW_HINT, Change, GitError, History, changed_paths, changes_since, merge_base, toplevel
+from okf.git import (
+    SHALLOW_HINT, Change, GitError, History, changed_paths, changes_since, merge_base, toplevel, web_base,
+)
 from okf.fix import KEY_HELP, FixError, ReplayProvider, apply, plan_drafts, plan_fixes, provider_from_env, render
 from okf.importer import import_confluence
 from okf.instructions import check_repository
@@ -26,6 +28,7 @@ from okf.trust import (
     TrustError, build_map, default_actor, knowledge_units, machine_edited, unit_json, verify, verify_units,
 )
 from okf.validate import has_errors, validate_bundle
+from okf.view import build_site, find_bundles, trust_html
 from okf.values import parse_now
 
 
@@ -45,6 +48,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"okf: error: directory not found: {args.repo}", file=sys.stderr)
             return 2
         return _fix(args)
+    if args.command == "view":
+        return _view(args)
     if args.command in ("agents-check", "trust", "sources"):
         if not Path(args.repo).is_dir():
             print(f"okf: error: directory not found: {args.repo}", file=sys.stderr)
@@ -74,6 +79,7 @@ def _parser() -> argparse.ArgumentParser:
                        help="OKF bundle to include (default: every .md with a type in its front matter)")
     trust.add_argument("--strict", action="store_true", help="exit 1 if anything is broken or to recheck")
     trust.add_argument("--json", action="store_true", help="print the map as JSON")
+    trust.add_argument("--html", metavar="FILE", help="also write the map as one self-contained page, e.g. report.html")
     _add_now(trust)
     _add_format(trust)
 
@@ -97,6 +103,11 @@ def _parser() -> argparse.ArgumentParser:
     verify_parser.add_argument("--all-current", action="store_true",
                                help="confirm every not yet verified instruction section whose code did not change")
     verify_parser.add_argument("--repo", default=".", help="where --all-current looks (default: .)")
+
+    view = commands.add_parser("view", help="a static site of the OKF knowledge: documents, trust levels, links")
+    view.add_argument("repo", nargs="?", default=".", help="a bundle, or a repository with bundles (default: .)")
+    view.add_argument("--out", default="site", metavar="DIR", help="where to write the site (default: site)")
+    _add_now(view)
 
     importer = commands.add_parser("import", help="bring knowledge from Confluence into git as OKF documents")
     importer.add_argument("system", choices=["confluence"], help="where from")
@@ -257,6 +268,9 @@ def _trust(args: argparse.Namespace) -> int:
         shown = [u for u in trust_map.units if u.in_change or u in broken]
     else:
         shown = trust_map.units
+    if args.html:
+        page = trust_html(trust_map, root, now, shown, web_base(git_root), git_root)
+        Path(args.html).write_text(page, encoding="utf-8", newline="\n")
     if args.json:
         data = {"summary": _trust_summary(trust_map), "warnings": [SHALLOW_HINT] if trust_map.shallow else [],
                 "units": [unit_json(u, root) for u in shown],
@@ -284,6 +298,8 @@ def _trust(args: argparse.Namespace) -> int:
             for path, note in trust_map.notes:
                 print(f"[INFO] {display_path(path)}: trust: {note}")
         sys.stdout.flush()
+    if args.html:
+        print(f"okf trust: wrote {args.html}", file=sys.stderr)
     return 1 if args.strict and problems else 0
 
 
@@ -383,6 +399,29 @@ def _verify(args: argparse.Namespace) -> int:
               "read each and confirm it with okf verify <unit>", file=sys.stderr)
     elif not names:
         print("okf verify: nothing to verify", file=sys.stderr)
+    return 0
+
+
+def _view(args: argparse.Namespace) -> int:
+    path = Path(args.repo).resolve()
+    if not path.is_dir():
+        print(f"okf: error: directory not found: {args.repo}", file=sys.stderr)
+        return 2
+    bundles = find_bundles(path)
+    if not bundles:
+        print(f"okf view: no OKF bundle (an index.md with okf_version) in {args.repo}", file=sys.stderr)
+        return 2
+    now, out = _now(args), Path(args.out)
+    git_root = toplevel(path)
+    history = History(git_root, now)
+    for bundle_root in bundles:
+        trust_map = build_map(git_root or path, history, None, [bundle_root], now)
+        units = {u.path: u for u in trust_map.units if u.kind == "knowledge"}
+        target = out if len(bundles) == 1 else out / bundle_root.name
+        bundle = Bundle.load(bundle_root)
+        pages = build_site(bundle, target, units, now)
+        print(f"okf view: {display_path(bundle_root)}: {len(bundle.concepts())} documents, "
+              f"open {display_path(pages[0])}", file=sys.stderr)
     return 0
 
 

@@ -8,6 +8,7 @@
 что перепроверить и где ссылки ведут в никуда.
 
 - `okf trust` — карта доверия по разделам инструкций и файлам базы знаний; `okf verify` — подтвердить раздел в одно действие;
+  `okf trust --html report.html` — та же карта страницей для людей, `okf view` — сайт базы знаний с графом связей;
 - `okf fix` — правки: механические без ИИ (переехавший файл, переименованный скрипт) и черновики от LLM для разделов,
   чей код поменялся (`--draft`, свой ключ); правленое остаётся «не подтверждено», пока человек не сделает `okf verify`;
 - коннекторы Confluence и Jira: закрытый эпик или новая версия страницы просит перепроверить документ;
@@ -104,6 +105,25 @@ okf trust: 16 units: 9 verified and current, 3 to recheck, 1 broken, 3 not verif
   а копия получает строку `[INFO] ... Generated from .ruler/`;
 - в неполной истории (`actions/checkout` по умолчанию берёт один коммит) дат нет: okf не выдумывает их и пишет
   предупреждение с примером `fetch-depth: 0`.
+
+## Просмотр: `okf trust --html report.html` и `okf view`
+
+`okf trust --html report.html` пишет карту доверия одной страницей: CSS и JS внутри, ни одного внешнего запроса —
+открывается офлайн, из артефакта CI или с ноутбука. Сверху сводка, ниже разделы по цветам (сломано — красный,
+перепроверить — жёлтый, подтверждено — зелёный, не подтверждено — серый): у каждого файл и строка, причина, какой
+источник и когда менялся, кто и когда подтвердил. Фильтр по уровню и поиск; светлая и тёмная тема по настройке
+системы; на телефоне карточки в одну колонку. Строка ведёт на GitHub, если репозиторий там (`origin` или переменные
+GitHub Actions). Action кладёт `report.html` артефактом `okf-trust-report`.
+
+![Карта доверия демо-репозитория](examples/screenshots/trust-report.png)
+
+`okf view <repo> --out site/` — статический сайт базы знаний OKF (каждый бандл с корневым `index.md`):
+- главная — текст `index.md` со ссылками на страницы, таблица документов (тип, свежесть, уровень доверия),
+  документы по тегам и граф ссылок между документами (SVG без библиотек, цвет — уровень доверия);
+- страница документа — Markdown в HTML и шапка: `type`, `status`, свежесть, `verified`, `stale_after`, источники,
+  уровень доверия с причиной.
+
+![Страница документа в okf view](examples/screenshots/knowledge-page.png)
 
 ## `okf verify FILE[#SECTION]... [--by ACTOR] [--all-current]`
 
@@ -400,7 +420,8 @@ okf scan --score report/label.csv       # точность связей посл
 
 1. pytest;
 2. `okf trust $OKF_REPO --since origin/<базовая ветка>` — какие разделы инструкций и документы знаний этот PR
-   делает «перепроверить», с указанием изменённого файла; на push — вся карта;
+   делает «перепроверить», с указанием изменённого файла; на push — вся карта; страница `report.html` —
+   артефактом `okf-trust-report`;
 3. `okf fix $OKF_REPO --since ...` — предложенные правки диффом в job summary; черновики LLM (`--draft`) — только
    если в репозитории задан секрет `ANTHROPIC_API_KEY` (или `OKF_LLM_API_KEY` с переменными `OKF_LLM_BASE_URL`,
    `OKF_LLM_MODEL`), иначе одна строка «skipped». Action сам ничего не коммитит и PR не открывает;
@@ -452,6 +473,15 @@ okf trust: 16 units: 9 verified and current, 3 to recheck, 1 broken, 3 not verif
 Из 16 разделов и документов перечитать нужно три (в одном упомянутый скрипт переехал), починить — один;
 остальное подтверждено или не менялось.
 Никакой разметки в репозитории для этого не понадобилось, кроме `.okf/trust.yml` от прошлых подтверждений.
+
+То же для людей — одной страницей и сайтом базы знаний (откройте файлы в браузере):
+
+```bash
+okf trust --html report.html
+okf view . --out site
+```
+
+Картинка выше, в разделе «Просмотр», — это `report.html` демо-репозитория на этом шаге.
 
 **2. PR меняет код — Action пишет, что перепроверить:**
 
@@ -594,9 +624,10 @@ okf validate examples/demo/knowledge --strict && okf agents examples/demo/knowle
 
 ```text
 src/okf/        trust.py (карта доверия, verify), fix.py (правки и черновики), scan.py (проба), instructions.py (agents-check), schema.py (поля и правила OKF,
-                профили okf и strict), importer.py (okf import), validate.py, stale.py, agents.py, bundle.py, git.py, cli.py
+                профили okf и strict), importer.py (okf import), view.py (report.html, okf view), validate.py, stale.py,
+                agents.py, bundle.py, git.py, cli.py
 src/okf/sources/ коннекторы: base.py (интерфейс Source), git.py, confluence.py, jira.py, http.py (запросы, фикстуры)
 tests/          pytest; fixtures/okf-official — официальный пример acme_retail (Apache-2.0)
-examples/       demo (мини-репозиторий + knowledge/), make_demo_history.py, demo-pr, broken
+examples/       demo (мини-репозиторий + knowledge/), make_demo_history.py, demo-pr, broken, atlassian-fixtures, screenshots
 etc/            бриф, спеки (v1 и v2), конкурентный анализ, интервью-кит
 ```

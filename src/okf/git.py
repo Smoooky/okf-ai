@@ -272,6 +272,25 @@ def commits_changing_count(repo_root: Path, text: str, path: str) -> list[str]:
         return []
 
 
+def web_base(repo_root: Path | None, env=None) -> str | None:
+    """https://github.com/<owner>/<repo>/blob/<commit> for links to lines: from the GitHub Actions
+    environment, else from the origin remote and HEAD. None if the repository is not on GitHub."""
+    env = os.environ if env is None else env
+    if env.get("GITHUB_REPOSITORY") and env.get("GITHUB_SHA"):
+        server = (env.get("GITHUB_SERVER_URL") or "https://github.com").rstrip("/")
+        return f"{server}/{env['GITHUB_REPOSITORY']}/blob/{env['GITHUB_SHA']}"
+    if repo_root is None:
+        return None
+    try:
+        remote = _git(["remote", "get-url", "origin"], cwd=repo_root).strip()
+        commit = _git(["rev-parse", "HEAD"], cwd=repo_root).strip()
+    except GitError:
+        return None
+    match = re.match(r"^(?:https://(?:[^@/]+@)?github\.com/|git@github\.com:|ssh://git@github\.com/)"
+                     r"([\w.-]+/[\w.-]+?)(?:\.git)?/?$", remote)
+    return f"https://github.com/{match.group(1)}/blob/{commit}" if match else None
+
+
 def _git(args: list[str], cwd: Path) -> str:
     try:
         result = subprocess.run(

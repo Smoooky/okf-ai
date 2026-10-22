@@ -59,8 +59,16 @@ jobs:
           OKF_ATLASSIAN_PAT: ${{ secrets.OKF_ATLASSIAN_PAT }}
         run: |  # in a PR: the sections this change makes to recheck; on push: the whole map
           okf trust "$OKF_REPO" $OKF_SINCE_ARGS --format github 2> /dev/null
-          okf trust "$OKF_REPO" $OKF_SINCE_ARGS > trust.txt 2> trust-summary.txt
+          okf trust "$OKF_REPO" $OKF_SINCE_ARGS --html report.html > trust.txt 2> trust-summary.txt
           cat trust-summary.txt trust.txt
+
+      - name: Upload the trust map page
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: okf-trust-report
+          path: report.html
+          if-no-files-found: ignore
 
       - name: okf fix
         env:  # drafts only when the repository sets a key; fork PRs get no secrets and skip them
