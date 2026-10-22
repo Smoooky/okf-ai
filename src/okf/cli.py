@@ -1,4 +1,4 @@
-"""Command line: okf trust | verify | agents-check | stale | validate | agents."""
+"""Command line: okf trust | verify | agents-check | stale | validate | agents | scan."""
 
 from __future__ import annotations
 
@@ -12,11 +12,12 @@ from okf import __version__
 from okf.agents import render_agents
 from okf.bundle import Bundle
 from okf.report import ERROR, INFO, WARNING, Issue, display_path, format_issue
-from okf.git import Change, GitError, History, changed_paths, changes_since, toplevel
+from okf.git import SHALLOW_HINT, Change, GitError, History, changed_paths, changes_since, merge_base, toplevel
 from okf.instructions import check_repository
+from okf.scan import ScanError, find_repos, parse_repos, scan, score
 from okf.schema import get_profile
 from okf.stale import find_stale, normalize_repo_path
-from okf.trust import TrustError, Unit, build_map, default_actor, verify, verify_units
+from okf.trust import TrustError, build_map, default_actor, unit_json, verify, verify_units
 from okf.validate import has_errors, validate_bundle
 from okf.values import parse_now
 
@@ -28,6 +29,8 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "verify":
         return _verify(args)
+    if args.command == "scan":
+        return _scan(args)
     if args.command in ("agents-check", "trust"):
         if not Path(args.repo).is_dir():
             print(f"okf: error: directory not found: {args.repo}", file=sys.stderr)
@@ -67,6 +70,22 @@ def _parser() -> argparse.ArgumentParser:
     verify_parser.add_argument("--all-current", action="store_true",
                                help="confirm every not yet verified instruction section whose code did not change")
     verify_parser.add_argument("--repo", default=".", help="where --all-current looks (default: .)")
+
+    scan_parser = commands.add_parser("scan", help="probe: the trust map over many public GitHub repositories")
+    mode = scan_parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--repos", metavar="FILE", help="owner/repo (or owner/repo@commit) per line")
+    mode.add_argument("--score", metavar="LABELS", help="precision of a hand-labelled label.csv")
+    mode.add_argument("--find", type=int, metavar="N", help="print N public repositories with AGENTS.md or "
+                      "CLAUDE.md pushed recently (needs `gh auth login`)")
+    scan_parser.add_argument("--out", default="report", help="report directory (default: report)")
+    scan_parser.add_argument("--jobs", type=int, default=4, help="repositories at a time (default: 4)")
+    scan_parser.add_argument("--sample", type=int, default=100, help="links to sample for labelling (default: 100)")
+    scan_parser.add_argument("--seed", type=int, default=42, help="seed of the sample (default: 42)")
+    scan_parser.add_argument("--timeout", type=int, default=300, help="seconds per clone (default: 300)")
+    scan_parser.add_argument("--work", help="where temporary clones go (default: the system temp directory)")
+    scan_parser.add_argument("--keep", action="store_true", help="keep the clones (for debugging)")
+    scan_parser.add_argument("--months", type=int, default=3, help="--find: pushed within this many months")
+    _add_now(scan_parser)
 
     check = commands.add_parser(
         "agents-check", help="check AGENTS.md, CLAUDE.md, Cursor and Copilot rules against the code"
@@ -167,35 +186,52 @@ def _trust(args: argparse.Namespace) -> int:
     root = Path(args.repo).resolve()
     git_root = toplevel(root)
     now = _now(args)
-    changes = None
+    changes = base_commit = None
     if args.since:
         if git_root is None:
             print("okf: error: --since needs a git repository", file=sys.stderr)
             return 2
         try:
+            base_commit = merge_base(git_root, args.since)
             changes = changes_since(git_root, args.since)
         except GitError as exc:
             print(f"okf: error: {exc}", file=sys.stderr)
             return 2
-    trust_map = build_map(root, History(git_root, now), changes, [Path(b) for b in args.bundle] or None, now)
-    shown = [u for u in trust_map.units if u.in_change] if changes is not None else trust_map.units
+    history = History(git_root, now)
+    trust_map = build_map(root, history, changes, [Path(b) for b in args.bundle] or None, now, base_commit)
+    if changes is not None:
+        shown = [u for u in trust_map.units if u.in_change]
+        problems = trust_map.in_change()
+    else:
+        shown = trust_map.units
+        problems = [u for u in shown if u.level in ("broken", "recheck")]
     if args.json:
-        data = {"summary": _trust_summary(trust_map), "units": [_unit_json(u, root) for u in shown]}
+        data = {"summary": _trust_summary(trust_map), "units": [unit_json(u, root) for u in shown],
+                "notes": [{"file": display_path(p), "note": n} for p, n in trust_map.notes]}
         print(json.dumps(data, ensure_ascii=False, indent=2))
     else:
+        if trust_map.shallow:
+            print(f"okf trust: warning: {SHALLOW_HINT}", file=sys.stderr)
         print(trust_map.summary(), file=sys.stderr)
         sys.stderr.flush()
         for unit in shown:
-            label = _TRUST_LABELS[unit.level]
+            label, message = _TRUST_LABELS[unit.level], unit.message
+            if unit.updated_in_change:
+                label = INFO
+                message = f"{', '.join(unit.in_change)} and this {'section' if unit.section else 'file'} " \
+                          "changed together in this change"
             if args.format == "github":
                 if label in (ERROR, WARNING):
-                    message = f"{unit.section}: {unit.message}" if unit.section else unit.message
-                    print(format_issue(Issue(label, unit.path, "trust", message, unit.line), "github"))
+                    shown_message = f"{unit.section}: {message}" if unit.section else message
+                    print(format_issue(Issue(label, unit.path, "trust", shown_message, unit.line), "github"))
                 continue
             name = display_path(unit.path) + (f"#{unit.section}" if unit.section else "")
-            print(f"[{label}] {name}: trust: {unit.message}")
+            print(f"[{label}] {name}: trust: {message}")
+        if args.format != "github":
+            for path, note in trust_map.notes:
+                print(f"[INFO] {display_path(path)}: trust: {note}")
         sys.stdout.flush()
-    return 1 if args.strict and any(u.level in ("broken", "recheck") for u in shown) else 0
+    return 1 if args.strict and problems else 0
 
 
 def _trust_summary(trust_map) -> dict:
@@ -205,32 +241,8 @@ def _trust_summary(trust_map) -> dict:
         "recheck": trust_map.count("recheck"),
         "broken": trust_map.count("broken"),
         "unverified": trust_map.count("unverified"),
-        "in_change": sum(bool(u.in_change) for u in trust_map.units) if trust_map.since else None,
-    }
-
-
-def _unit_json(unit: Unit, root: Path) -> dict:
-    def stamp(moment):
-        return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if moment else None
-
-    def relative(path):
-        path = Path(path)
-        return path.relative_to(root).as_posix() if path.is_relative_to(root) else path.as_posix()
-
-    return {
-        "unit": unit.name,
-        "file": relative(unit.path),
-        "section": unit.section,
-        "line": unit.line,
-        "kind": unit.kind,
-        "level": unit.level,
-        "message": unit.message,
-        "sources": [relative(s) for s in unit.sources],
-        "changed": [{"path": path, "at": stamp(at)} for path, at in unit.changed],
-        "in_change": unit.in_change,
-        "broken": unit.broken,
-        "verified": [{"by": by, "at": stamp(at)} for at, by in sorted(unit.verifications)],
-        "last_edited": stamp(unit.last_edited),
+        "in_change": len(trust_map.in_change()) if trust_map.since else None,
+        "history": "shallow" if trust_map.shallow else "full",
     }
 
 
@@ -260,6 +272,31 @@ def _verify(args: argparse.Namespace) -> int:
         print(f"okf verify: {name} verified by {by} at {stamp}", file=sys.stderr)
     if not names:
         print("okf verify: nothing to verify", file=sys.stderr)
+    return 0
+
+
+def _scan(args: argparse.Namespace) -> int:
+    def log(message: str) -> None:
+        print(message, file=sys.stderr, flush=True)
+
+    try:
+        if args.score:
+            sys.stdout.write(score(Path(args.score)))
+            return 0
+        if args.find:
+            for name in find_repos(args.find, args.months, log):
+                print(name)
+            return 0
+        specs = parse_repos(Path(args.repos).read_text(encoding="utf-8"))
+    except (ScanError, OSError) as exc:
+        print(f"okf: error: {exc}", file=sys.stderr)
+        return 2
+    out = Path(args.out)
+    log(f"okf scan: {len(specs)} repositories, {args.jobs} at a time; report in {out}")
+    rows = scan(specs, out, args.jobs, args.sample, args.seed, args.now, args.timeout,
+                Path(args.work) if args.work else None, args.keep, log=log)
+    done = sum(r["status"] == "ok" for r in rows)
+    log(f"okf scan: {done} scanned, {len(rows) - done} skipped; see {out / 'summary.md'}")
     return 0
 
 

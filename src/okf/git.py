@@ -38,10 +38,44 @@ def toplevel(path: Path) -> Path | None:
         return None
 
 
+SHALLOW_HINT = (
+    "the git history is shallow (actions/checkout fetches one commit by default), so commit dates are unknown; "
+    "fetch the whole history: actions/checkout with `fetch-depth: 0`, or `git fetch --unshallow`"
+)
+
+
+def is_shallow(repo_root: Path) -> bool:
+    try:
+        return _git(["rev-parse", "--is-shallow-repository"], cwd=repo_root).strip() == "true"
+    except GitError:
+        return False
+
+
+def merge_base(repo_root: Path, base: str) -> str:
+    try:
+        return _git(["merge-base", base, "HEAD"], cwd=repo_root).strip()
+    except GitError as exc:
+        if is_shallow(repo_root):
+            raise GitError(f"{exc}; {SHALLOW_HINT}") from exc
+        raise
+
+
+def changed_lines(repo_root: Path, commit: str, path: str) -> set[int]:
+    """Lines of the current file that changed since `commit`; a pure deletion marks the lines around it."""
+    try:
+        output = _git(["diff", "-U0", "--no-color", "--no-ext-diff", commit, "--", path], cwd=repo_root)
+    except GitError:
+        return set()
+    lines: set[int] = set()
+    for match in re.finditer(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@", output, re.M):
+        start, count = int(match.group(1)), int(match.group(2) if match.group(2) is not None else 1)
+        lines.update({start, start + 1} if count == 0 else range(start, start + count))
+    return lines
+
+
 def changes_since(repo_root: Path, base: str) -> list[Change]:
     """Changes since the merge base with `base`, uncommitted ones included, with renames detected."""
-    merge_base = _git(["merge-base", base, "HEAD"], cwd=repo_root).strip()
-    output = _git(["diff", "--name-status", "-M", "-z", merge_base], cwd=repo_root)
+    output = _git(["diff", "--name-status", "-M", "-z", merge_base(repo_root, base)], cwd=repo_root)
     parts = output.split("\0")
     result, i = [], 0
     while i < len(parts) and parts[i]:
@@ -59,19 +93,58 @@ class History:
     """Commit dates, cached: when a path last changed, when each line of a file was last edited.
 
     Uncommitted changes are dated by the file modification time. Dates are whole seconds, like
-    the timestamps okf writes. Without a git repository every date is None.
+    the timestamps okf writes. Without a git repository, or with a shallow one (where the oldest
+    commit seems to touch every file), every date is None.
     """
 
     def __init__(self, root: Path | None, now: datetime | None = None):
         self.root = Path(root).resolve() if root else None
         self.now = (now or datetime.now(timezone.utc)).replace(microsecond=0)
+        self.shallow = bool(self.root) and is_shallow(self.root)
         self._last: dict[str, datetime | None] = {}
         self._lines: dict[Path, list[datetime | None]] = {}
+        self._moves: dict[str, tuple[Path, datetime | None] | None] = {}
         self._dirty: set[str] | None = None
 
+    @property
+    def dated(self) -> bool:
+        return self.root is not None and not self.shallow
+
+    def moved(self, path: Path) -> tuple[Path, datetime | None] | None:
+        """Where a file that no longer exists went: (new path, when), following renames in history."""
+        if not self.dated:
+            return None
+        relative = self.relative(path)
+        if relative is None or relative.startswith("../"):
+            return None
+        if relative not in self._moves:
+            self._moves[relative] = self._follow(relative)
+        return self._moves[relative]
+
+    def _follow(self, current: str) -> tuple[Path, datetime | None] | None:
+        when = None
+        for _ in range(5):  # a file renamed a few times
+            try:
+                last = _git(["log", "-1", "--format=%H %cI", "--", current], cwd=self.root).split()
+                if len(last) != 2:
+                    return None
+                # Without a pathspec, so that git pairs the old and the new name.
+                shown = _git(["show", "-M", "--name-status", "--format=", last[0]], cwd=self.root)
+            except GitError:
+                return None
+            when = _instant(last[1])
+            renamed = [p[2] for p in (line.split("\t") for line in shown.splitlines())
+                       if len(p) == 3 and p[0].startswith("R") and p[1] == current]
+            if not renamed:
+                return None
+            current = renamed[0]
+            if (self.root / current).exists():
+                return self.root / current, when
+        return None
+
     def last_change(self, path: Path) -> datetime | None:
-        """Last commit date (%cI) touching a file, a directory or a glob."""
-        if self.root is None:
+        """Last commit date (%cI) touching a file (following renames), a directory or a glob."""
+        if not self.dated:
             return None
         relative = self.relative(path)
         if relative is None:
@@ -82,8 +155,9 @@ class History:
                 self._last[relative] = max(self._modified(self.root / d) for d in dirty)
             else:
                 spec = f":(glob){relative}" if any(ch in relative for ch in "*?[") else relative
+                follow = ["--follow"] if (self.root / relative).is_file() else []
                 try:
-                    output = _git(["log", "-1", "--format=%cI", "--", spec], cwd=self.root).strip()
+                    output = _git(["log", "-1", *follow, "--format=%cI", "--", spec], cwd=self.root).strip()
                 except GitError:
                     output = ""
                 self._last[relative] = _instant(output)
@@ -95,7 +169,7 @@ class History:
         if path not in self._lines:
             dates: list[datetime | None] = []
             relative = self.relative(path)
-            if self.root is not None and relative is not None:
+            if self.dated and relative is not None:
                 try:
                     blamed = _blame(_git(["blame", "--porcelain", "--", relative], cwd=self.root))
                     dates = [d or self._modified(path) for d in blamed]

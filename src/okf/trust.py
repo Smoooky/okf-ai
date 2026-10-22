@@ -26,9 +26,10 @@ import yaml
 
 from okf import schema
 from okf.bundle import Bundle, Document, load_document, load_yaml
-from okf.git import Change, History, changed_paths
+from okf.git import Change, History, changed_lines, changed_paths
 from okf.instructions import (
-    FENCE_INFO_RE, SKIP_DIRS, InstructionFile, Repository, discover, front_matter_end, instruction_scope, references,
+    DOCUMENT_SUFFIXES, FENCE_INFO_RE, SKIP_DIRS, InstructionFile, Repository, discover, front_matter_end,
+    instruction_scope, references,
 )
 from okf.stale import resource_paths
 from okf.values import parse_instant
@@ -64,6 +65,12 @@ class Unit:
     message: str = ""
     changed: list[tuple[str, datetime]] = field(default_factory=list)  # sources newer than the reference date
     in_change: list[str] = field(default_factory=list)  # sources a pull request changed
+    updated_in_change: bool = False  # the pull request also edited this section or document
+    moved: list[tuple[str, str, datetime | None]] = field(default_factory=list)  # (as written, new path, when)
+    broken_types: list[str] = field(default_factory=list)
+    links: list[dict] = field(default_factory=list)  # every reference, for okf scan and --json
+    end: int = 0
+    reason: str = ""  # a short code for statistics, e.g. "broken:npm-script", "recheck:moved"
 
 
 @dataclass
@@ -71,6 +78,8 @@ class TrustMap:
     units: list[Unit]
     root: Path
     since: bool = False
+    notes: list[tuple[Path, str]] = field(default_factory=list)  # generated copies and links: checked elsewhere
+    shallow: bool = False
 
     def count(self, *levels: str) -> int:
         return sum(unit.level in levels for unit in self.units)
@@ -82,31 +91,58 @@ class TrustMap:
             f"{self.count('unverified')} not verified"
         )
         if self.since:
-            text += f"; {sum(bool(u.in_change) for u in self.units)} to recheck because of this change"
+            text += f"; {len(self.in_change())} to recheck because of this change"
         return text
+
+    def in_change(self) -> list[Unit]:
+        """Units whose code a pull request changed without touching the unit itself."""
+        return [u for u in self.units if u.in_change and not u.updated_in_change]
 
 
 # --- Building the map ----------------------------------------------------------------
 
 
 def build_map(root: Path, history: History, changes: list[Change] | None = None,
-              bundles: list[Path] | None = None, now: datetime | None = None) -> TrustMap:
+              bundles: list[Path] | None = None, now: datetime | None = None,
+              base_commit: str | None = None) -> TrustMap:
+    """The trust map of `root`. With `changes` (and the `base_commit` they start from), also what a
+    pull request changed; a section or document the same change edited is not asked to be rechecked."""
     root = Path(root).resolve()
     now = now or datetime.now(timezone.utc)
-    units = instruction_units(root, history) + knowledge_units(root, history, bundles)
+    instructions, notes = instruction_units(root, history)
+    units = instructions + knowledge_units(root, history, bundles)
     changed = None if changes is None else set(changed_paths(changes))
+    if changed is not None:
+        _mark_updated(units, history, changed, base_commit)
     for unit in units:
         _evaluate(unit, root, history, changed, now)
     order = {level: i for i, level in enumerate(LEVELS)}
     units.sort(key=lambda u: order[u.level])  # stable: file order within a level
-    return TrustMap(units, root, since=changes is not None)
+    return TrustMap(units, root, since=changes is not None, notes=notes, shallow=history.shallow)
 
 
-def instruction_units(root: Path, history: History) -> list[Unit]:
-    repository = Repository(root)
+def _mark_updated(units: list[Unit], history: History, changed: set[str], base_commit: str | None) -> None:
+    lines_by_file: dict[Path, set[int]] = {}
+    for unit in units:
+        relative = history.relative(unit.path) if history.root else None
+        if relative is None or relative not in changed:
+            continue
+        if unit.kind == "knowledge" or base_commit is None:
+            unit.updated_in_change = True
+            continue
+        if unit.path not in lines_by_file:
+            lines_by_file[unit.path] = changed_lines(history.root, base_commit, relative)
+        unit.updated_in_change = any(unit.line <= n <= unit.end for n in lines_by_file[unit.path])
+
+
+def instruction_units(root: Path, history: History) -> tuple[list[Unit], list[tuple[Path, str]]]:
+    repository = Repository(root, history)
     sidecars = _Sidecars(history.root)
-    units = []
+    units, notes = [], []
     for instruction in discover(root):
+        if instruction.alias_of or instruction.generated_from:
+            notes.append((instruction.path, instruction.note(root)))
+            continue
         try:
             text = instruction.path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
@@ -120,9 +156,14 @@ def instruction_units(root: Path, history: History) -> list[Unit]:
         for title, start, end in sections(text):
             inside = [r for r in found.references if start <= r.line <= end]
             unit = Unit(_unit_name(instruction.path, root, title), instruction.path, title, start, "instruction")
+            unit.end = end
             unit.sources = instruction_sources(inside)
             unit.touched = _unique([*unit.sources, *(c for r in inside for c in r.candidates if not c.is_dir())])
             unit.broken = [r.missing for r in inside if r.missing]
+            unit.broken_types = [r.type for r in inside if r.missing]
+            unit.moved = [(r.path, _relative(r.moved_to, instruction.scope), r.moved_at)
+                          for r in inside if r.status == "moved"]
+            unit.links = [_link(r, lines, root) for r in inside]
             unit.text_hash = section_hash(lines[start - 1 : end])
             edited = [d for d in dates[start - 1 : end] if d is not None]
             unit.last_edited = max(edited) if edited else None
@@ -132,16 +173,32 @@ def instruction_units(root: Path, history: History) -> list[Unit]:
                     unit.verifications = _verifications(record.get("verified"))
                     unit.recorded_hash = record.get("hash")
             units.append(unit)
-    return units
+    return units, notes
 
 
 def instruction_sources(found: list) -> list[Path]:
     """The files a part of an instruction describes.
 
     Globs (`src/**/*.py`, Cursor `globs:`) and directories (`src/`) say where something lives or
-    applies, not which code it describes: every change under them would ask for a recheck.
+    applies, and linked or imported documents (`docs/x.md`, `@AGENTS.md`) are texts of their own:
+    neither is code the part describes, and every change in them would ask for a recheck.
     """
-    return _unique(s for r in found for s in r.sources if "*" not in str(s) and not Path(s).is_dir())
+    return _unique(
+        s for r in found for s in r.sources
+        if "*" not in str(s) and not Path(s).is_dir() and Path(s).suffix.lower() not in DOCUMENT_SUFFIXES
+    )
+
+
+def _link(reference, lines: list[str], root: Path) -> dict:
+    if reference.path is not None:
+        source = _relative(reference.sources[0], root) if reference.sources else reference.path
+    else:
+        source = reference.subject.strip('"')
+        if reference.sources:
+            source += f" ({_relative(reference.sources[0], root)})"
+    text = lines[reference.line - 1].strip() if 0 < reference.line <= len(lines) else ""
+    return {"line": reference.line, "type": reference.type, "status": reference.status + (
+        ":root" if reference.base == "root" else ""), "source": source, "text": text[:240]}
 
 
 def knowledge_units(root: Path, history: History, bundles: list[Path] | None = None) -> list[Unit]:
@@ -163,6 +220,7 @@ def knowledge_units(root: Path, history: History, bundles: list[Path] | None = N
                 unit.sources.append(existing[0])
             else:
                 unit.broken.append(f'source "{resource}" does not exist')
+                unit.broken_types.append("source")
         unit.sources, unit.touched = _unique(unit.sources), _unique(unit.touched)
         unit.verifications = _verifications(doc.get("verified", None))
         unit.generated_at = parse_instant(doc.get("generated.at", None))
@@ -230,47 +288,76 @@ def _evaluate(unit: Unit, root: Path, history: History, changed: set[str] | None
                 unit.in_change.append(_show(path, root))
         unit.in_change = sorted(set(unit.in_change))
 
+    def result(level: str, message: str, reason: str) -> None:
+        unit.level, unit.message, unit.reason = level, message, reason
+
     if unit.broken:
         more = f" (and {len(unit.broken) - 1} more)" if len(unit.broken) > 1 else ""
-        unit.level, unit.message = "broken", unit.broken[0] + more
-        return
-    if unit.in_change:
-        unit.level, unit.message = "recheck", f"{', '.join(unit.in_change)} changed in this change; {last}"
-        return
+        return result("broken", unit.broken[0] + more, f"broken:{unit.broken_types[0]}")
+    if unit.moved:
+        old, new, when = unit.moved[0]
+        on = f" on {_day(when)}" if when else ""
+        return result("recheck", f"{old} moved to {new}{on}; {last}", "recheck:moved")
+    if unit.in_change and not unit.updated_in_change:
+        return result("recheck", f"{', '.join(unit.in_change)} changed in this change; {last}", "recheck:in-change")
     if latest is not None:
         unit.changed = [(_show(s, root), d) for s, d in dated if d > latest[0]]
         if unit.recorded_hash and unit.text_hash and unit.recorded_hash != unit.text_hash:
-            unit.level, unit.message = "recheck", f"section edited after it was verified; {last}"
-        elif unit.generated_at and unit.generated_at > latest[0]:
-            unit.level = "recheck"
-            unit.message = f"content regenerated {_day(unit.generated_at)} after it was verified; {last}"
-        elif unit.stale_after and now >= unit.stale_after:
-            unit.level, unit.message = "recheck", f"stale_after {_day(unit.stale_after)} has passed; {last}"
-        elif unit.changed:
+            return result("recheck", f"section edited after it was verified; {last}", "recheck:edited")
+        if unit.generated_at and unit.generated_at > latest[0]:
+            return result("recheck", f"content regenerated {_day(unit.generated_at)} after it was verified; {last}",
+                          "recheck:regenerated")
+        if unit.stale_after and now >= unit.stale_after:
+            return result("recheck", f"stale_after {_day(unit.stale_after)} has passed; {last}", "recheck:stale-after")
+        if unit.changed:
             source, day = max(unit.changed, key=lambda item: item[1])
-            unit.level, unit.message = "recheck", f"{source} changed {_day(day)}, {last}"
-        else:
-            humans = [v for v in unit.verifications if schema.is_human(v[1])]
-            human = max(humans, default=None)
-            verified = human if human and (newest is None or human[0] >= newest[1]) else None
-            unit.level = "human-verified" if verified else "process-verified"
-            verified = verified or latest
-            unit.message = f"verified {_day(verified[0])} by {verified[1]}" + _sources_note(unit)
-        return
+            return result("recheck", f"{source} changed {_day(day)}, {last}", "recheck:code-changed")
+        humans = [v for v in unit.verifications if schema.is_human(v[1])]
+        human = max(humans, default=None)
+        verified = human if human and (newest is None or human[0] >= newest[1]) else None
+        level = "human-verified" if verified else "process-verified"
+        verified = verified or latest
+        return result(level, f"verified {_day(verified[0])} by {verified[1]}" + _sources_note(unit), "verified")
     if unit.stale_after and now >= unit.stale_after:
-        unit.level, unit.message = "recheck", f"stale_after {_day(unit.stale_after)} has passed; never verified"
-    elif newest and unit.last_edited and newest[1] > unit.last_edited:
+        return result("recheck", f"stale_after {_day(unit.stale_after)} has passed; never verified",
+                      "recheck:stale-after")
+    if newest and unit.last_edited and newest[1] > unit.last_edited:
         unit.changed = [(_show(s, root), d) for s, d in dated if d > unit.last_edited]
         what = "section" if unit.kind == "instruction" else "file"
-        unit.level = "recheck"
-        unit.message = f"{_show(newest[0], root)} changed {_day(newest[1])}, {what} last edited {_day(unit.last_edited)} and never verified"
-    else:
-        edited = f"; last edited {_day(unit.last_edited)}" if unit.last_edited else ""
-        unit.level, unit.message = "unverified", f"not verified{edited}" + _sources_note(unit)
+        return result("recheck", f"{_show(newest[0], root)} changed {_day(newest[1])}, "
+                      f"{what} last edited {_day(unit.last_edited)} and never verified", "recheck:code-changed")
+    edited = f"; last edited {_day(unit.last_edited)}" if unit.last_edited else ""
+    reason = "unverified" if unit.sources else "unverified:no-sources"
+    return result("unverified", f"not verified{edited}" + _sources_note(unit), reason)
 
 
 def _sources_note(unit: Unit) -> str:
     return "; sources unchanged since" if unit.sources else "; no code references found"
+
+
+def unit_json(unit: Unit, root: Path) -> dict:
+    def stamp(moment):
+        return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ") if moment else None
+
+    return {
+        "unit": unit.name,
+        "file": _relative(unit.path, root),
+        "section": unit.section,
+        "line": unit.line,
+        "kind": unit.kind,
+        "level": unit.level,
+        "reason": unit.reason,
+        "message": unit.message,
+        "sources": [_relative(s, root) for s in unit.sources],
+        "changed": [{"path": path, "at": stamp(at)} for path, at in unit.changed],
+        "in_change": unit.in_change,
+        "updated_in_change": unit.updated_in_change,
+        "broken": unit.broken,
+        "moved": [{"from": old, "to": new, "at": stamp(at)} for old, new, at in unit.moved],
+        "verified": [{"by": by, "at": stamp(at)} for at, by in sorted(unit.verifications)],
+        "last_edited": stamp(unit.last_edited),
+        "links": unit.links,
+    }
 
 
 # --- Confirming: okf verify -----------------------------------------------------------

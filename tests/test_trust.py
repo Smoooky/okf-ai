@@ -354,7 +354,8 @@ def test_cli_trust_text_json_strict_and_github(repo, capsys):
     assert len(out) == 1 and out[0].startswith("::error ")
     _, out, _ = run(capsys, "trust", str(repo.root), "--json")
     data = json.loads("\n".join(out))
-    assert data["summary"] == {"units": 4, "verified": 0, "recheck": 0, "broken": 1, "unverified": 3, "in_change": None}
+    assert data["summary"] == {"units": 4, "verified": 0, "recheck": 0, "broken": 1, "unverified": 3, "in_change": None,
+                               "history": "full"}
     assert data["units"][0]["unit"] == "AGENTS.md#Seed" and data["units"][0]["level"] == "broken"
 
 
@@ -383,7 +384,7 @@ def test_demo_history_tells_the_story(tmp_path):
     subprocess.run([sys.executable, str(script), str(target)], check=True, capture_output=True)
     history = History(target, NOW)
     levels = {u.name: u.level for u in build_map(target, history, now=NOW).units}
-    assert levels["AGENTS.md#Команды"] == "broken"
+    assert levels["AGENTS.md#Команды"] == "recheck"  # seed_db.sh moved to seed.sh: edge case 8
     assert levels["AGENTS.md#Auth"] == "recheck"
     assert levels["AGENTS.md#Billing"] == "human-verified"
     assert levels["knowledge/auth_flow.md"] == "recheck"

@@ -45,9 +45,9 @@ python -m pytest
 ## `okf trust [repo] [--since REF] [--strict] [--json]`
 
 ```text
-okf trust: 16 units: 9 verified and current, 2 to recheck, 2 broken, 3 not verified
-[ERROR] AGENTS.md#Команды: trust: "./scripts/seed_db.sh" does not exist
+okf trust: 16 units: 9 verified and current, 3 to recheck, 1 broken, 3 not verified
 [ERROR] CLAUDE.md: trust: "npm run test:unit": no script "test:unit" in package.json
+[WARNING] AGENTS.md#Команды: trust: ./scripts/seed_db.sh moved to scripts/seed.sh on 2026-08-20; never verified
 [WARNING] AGENTS.md#Auth: trust: src/auth.py changed 2026-10-20, last verified 2026-09-05 by human:teamlead_ivan
 [WARNING] knowledge/auth_flow.md: trust: src/auth.py changed 2026-10-20, last verified 2026-10-19 by human:teamlead_ivan
 [OK] AGENTS.md#Billing: trust: verified 2026-09-05 by human:maria_backend; sources unchanged since
@@ -73,13 +73,28 @@ okf trust: 16 units: 9 verified and current, 2 to recheck, 2 broken, 3 not verif
 | Уровень | Строка | Когда |
 |---|---|---|
 | сломано | `ERROR` | раздел ссылается на несуществующий файл, скрипт `package.json`, цель `Makefile` |
-| перепроверить | `WARNING` | код менялся после подтверждения (или, если подтверждений нет, после правки раздела); раздел правили после подтверждения; у OKF — `generated.at` позже `verified` или наступил `stale_after` |
+| перепроверить | `WARNING` | код менялся после подтверждения (или, если подтверждений нет, после правки раздела); упомянутый файл переехал (`git log`: «moved to новый/путь»); раздел правили после подтверждения; у OKF — `generated.at` позже `verified` или наступил `stale_after` |
 | подтверждено | `OK` | последнее подтверждение позже изменений кода: человеком (`human:`) или процессом (`process:`) |
 | не подтверждено | `INFO` | подтверждений нет, но и код с тех пор не менялся |
 
 `--since origin/main` — только то, что этот набор изменений делает «перепроверить»: каждая единица, чей
-источник изменён, с указанием файла. `--json` — то же для машин. Код выхода `0`; с `--strict` — `1`, если есть
-«сломано» или «перепроверить».
+источник изменён, с указанием файла. Если тот же PR поправил и сам раздел, он не помечается
+(`[INFO] ... changed together in this change`). `--json` — то же для машин. Код выхода `0`; с `--strict` — `1`,
+если есть «сломано» или «перепроверить».
+
+**Чтобы не было ложных «сломано»** (они быстрее всего убивают доверие к отчёту):
+- заглушки и примеры (`path/to/file.ts`, `src/foo.py`, `your-project/…`, `example/…`) — статус «неясно», не проверяются;
+- пути из `.gitignore` (в корне и во вложенных папках) и обычные результаты сборки (`dist/`, `node_modules/`, `.env`) —
+  «неизвестно»: они появляются только после сборки;
+- во вложенных инструкциях (`packages/api/AGENTS.md`) пути ищутся от папки файла, потом от корня (в `--json` такая
+  связь помечена `ok:root`);
+- `CLAUDE.md` — симлинк или однострочная ссылка на `AGENTS.md` — считается один раз; `@AGENTS.md`-импорт
+  не делает CLAUDE.md зависимым от правок AGENTS.md;
+- копии, которые генерируют [Ruler](https://github.com/intellectronica/ruler) и [rulesync](https://github.com/dyoshikawa/rulesync)
+  (маркер в файле или блок Ruler в `.gitignore`), не помечаются: проверяется источник в `.ruler/` или `.rulesync/`,
+  а копия получает строку `[INFO] ... Generated from .ruler/`;
+- в неполной истории (`actions/checkout` по умолчанию берёт один коммит) дат нет: okf не выдумывает их и пишет
+  предупреждение с примером `fetch-depth: 0`.
 
 ## `okf verify FILE[#SECTION]... [--by ACTOR] [--all-current]`
 
@@ -196,6 +211,30 @@ okf verify --all-current                  # все неподтверждённ�
 У роутера есть OKF-шапка (`type: Agent Router`), так что бандл остаётся валидным и для чужих инструментов.
 `-o -` — в stdout, `--check` — код `1`, если файл устарел, `--now` — посчитать свежесть на другой момент.
 
+## `okf scan`: проба на публичных репозиториях
+
+Чтобы до разработки проверить две главные ставки — инструкции действительно отстают от кода, и связи
+«раздел → код» находятся верно, — карта прогоняется по списку публичных репозиториев:
+
+```bash
+okf scan --find 50 > repos.txt          # поиск GitHub по AGENTS.md / CLAUDE.md, push за 3 месяца (нужен `gh auth login`)
+okf scan --repos repos.txt --out report # клон с историей без содержимого файлов, okf trust, удаление клона
+okf scan --score report/label.csv       # точность связей после ручной разметки
+```
+
+- Каждый репозиторий клонируется `git clone --filter=blob:none` в отдельную временную папку и удаляется после.
+  Код из него не запускается, в него ничего не пишется. Ошибки клонирования, приватные и удалённые репозитории
+  не останавливают прогон — пропуск с причиной.
+- `report/summary.md` — сколько обработано и пропущено; доля репозиториев с ≥1 «перепроверить», с ≥1 «сломано»,
+  с любой находкой (частота момента «вау»); без инструкций; с AGENTS.md и CLAUDE.md сразу; распределение числа
+  разделов; топ причин пометок; статистика связей.
+- `report/repos.csv` — строка на репозиторий: счётчики по статусам, время, коммит. `report/raw/` — `okf trust --json`
+  каждого. `report/repos.pinned.txt` — тот же список с коммитами: по нему результат воспроизводится
+  (`--now` и `--seed` из `summary.md`).
+- `report/label.csv` — случайные 100 связей (`--sample`, seed `--seed`, по умолчанию 42) с колонками `repo, file, line,
+  section, source, type, extracted_from, status, correct, comment, url`. Человек заполняет `correct`: да / нет / неясно.
+  `--score` считает долю «да» среди размеченных, отдельно по типам связей (путь, npm-скрипт, make, скрипт).
+
 ## GitHub Action
 
 [`.github/workflows/okf.yml`](.github/workflows/okf.yml) на каждый pull request и push в `main`:
@@ -236,16 +275,17 @@ okf trust
 ```
 
 ```text
-okf trust: 16 units: 9 verified and current, 2 to recheck, 2 broken, 3 not verified
-[ERROR] AGENTS.md#Команды: trust: "./scripts/seed_db.sh" does not exist
+okf trust: 16 units: 9 verified and current, 3 to recheck, 1 broken, 3 not verified
 [ERROR] CLAUDE.md: trust: "npm run test:unit": no script "test:unit" in package.json
+[WARNING] AGENTS.md#Команды: trust: ./scripts/seed_db.sh moved to scripts/seed.sh on 2026-08-20; never verified
 [WARNING] AGENTS.md#Auth: trust: src/auth.py changed 2026-10-20, last verified 2026-09-05 by human:teamlead_ivan
 [WARNING] knowledge/auth_flow.md: trust: src/auth.py changed 2026-10-20, last verified 2026-10-19 by human:teamlead_ivan
 [OK] AGENTS.md#Billing: trust: verified 2026-09-05 by human:maria_backend; sources unchanged since
 ...
 ```
 
-Из 16 разделов и документов перечитать нужно два, починить — два; остальное подтверждено или не менялось.
+Из 16 разделов и документов перечитать нужно три (в одном упомянутый скрипт переехал), починить — один;
+остальное подтверждено или не менялось.
 Никакой разметки в репозитории для этого не понадобилось, кроме `.okf/trust.yml` от прошлых подтверждений.
 
 **2. PR меняет код — Action пишет, что перепроверить:**
@@ -256,7 +296,7 @@ okf trust --since main
 ```
 
 ```text
-okf trust: 16 units: 6 verified and current, 6 to recheck, 2 broken, 2 not verified; 4 to recheck because of this change
+okf trust: 16 units: 6 verified and current, 7 to recheck, 1 broken, 2 not verified; 4 to recheck because of this change
 [WARNING] AGENTS.md#Billing: trust: src/billing.py changed in this change; last verified 2026-09-05 by human:maria_backend
 [WARNING] .cursor/rules/backend.mdc: trust: src/billing.py changed in this change; never verified
 [WARNING] knowledge/billing_service.md: trust: src/billing.py changed in this change; last verified 2026-10-05 by human:maria_backend
@@ -317,7 +357,7 @@ okf validate examples/demo/knowledge --strict && okf agents examples/demo/knowle
 ## Структура
 
 ```text
-src/okf/        trust.py (карта доверия, verify), instructions.py (agents-check), schema.py (поля и правила OKF,
+src/okf/        trust.py (карта доверия, verify), scan.py (проба), instructions.py (agents-check), schema.py (поля и правила OKF,
                 профили okf и strict), validate.py, stale.py, agents.py, bundle.py, git.py, cli.py
 tests/          pytest; fixtures/okf-official — официальный пример acme_retail (Apache-2.0)
 examples/       demo (мини-репозиторий + knowledge/), make_demo_history.py, demo-pr, broken
