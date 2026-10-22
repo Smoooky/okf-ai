@@ -186,7 +186,7 @@ okf verify --all-current                  # все неподтверждённ�
 - `--by` по умолчанию — `human:` + `git config user.email` (или `user.name`). Раздел ищется по точному заголовку,
   без учёта регистра или по slug (`#getting-started`).
 
-## `okf fix [repo] [--draft] [--apply]`
+## `okf fix [repo] [--draft] [--apply | --pr]`
 
 Правит то, что нашли `okf trust` и `okf agents-check`. По умолчанию печатает unified diff (`okf fix > fix.patch`,
 `git apply fix.patch`), с `--apply` пишет в рабочую копию. Сами инструкции правятся только точечной заменой
@@ -215,6 +215,28 @@ okf verify --all-current                  # все неподтверждённ�
 **Доверие после правки.** Каждый правленый раздел получает `generated: {by: process:okf-fix | anthropic/<модель>, at}` —
 в `.okf/trust.yml` для инструкций, во frontmatter для OKF — и никогда `verified`. В карте доверия он «не подтверждён»
 (`edited by … ; not verified`), пока человек не сделает `okf verify`: ИИ правит и понижает доверие, человек подтверждает.
+
+### `okf fix --pr`: правки отдельным pull request (Freshness Engine)
+
+`okf fix --pr [--draft]` делает из правок PR, не трогая текущую ветку:
+1. ветка `okf/update-<base>-<short sha>` от текущего коммита;
+2. коммит с механическими правками и, если есть `--draft` и ключ, принятыми черновиками ИИ (в `.okf/trust.yml` —
+   `generated`, не `verified`);
+3. `git push` и `gh pr create` с заголовком `[OKF-Update] 2 sections: AGENTS.md#Команды, AGENTS.md#Auth` и описанием:
+   что поменялось и почему (механически или черновик какой модели), что требует человека, и
+   «Generated, not verified … `okf verify "AGENTS.md#Команды" "AGENTS.md#Auth"`»;
+4. возврат на исходную ветку.
+
+Если `[OKF-Update]` PR в ту же базу уже открыт, второй не создаётся: его ветка получает новый коммит
+(`--force-with-lease`), а заголовок и описание обновляются (`gh pr edit`). Нечего править — PR нет. С
+незакоммиченными изменениями в рабочей копии `--pr` отказывается. Нужны `git` с remote `origin` и
+[GitHub CLI](https://cli.github.com) (`gh auth login` или `GH_TOKEN`). Проверено на временном git-репозитории
+с локальным «remote» и подменённым `gh`; настоящий PR на GitHub не открывался.
+
+**В Action — по желанию, по умолчанию выключено.** Задание `auto-pr` запускается на push в `main`, если в
+репозитории переменная `OKF_AUTO_PR=true`, или вручную (Run workflow → `okf-auto-pr`). У него `permissions:
+contents: write, pull-requests: write`; в настройках репозитория нужно разрешить GitHub Actions создавать PR
+(Settings → Actions → General → «Allow GitHub Actions to create and approve pull requests»).
 
 ## Источники вне git: Confluence и Jira
 
@@ -468,7 +490,9 @@ okf scan --score report/label.csv       # точность связей посл
    `OKF_LLM_MODEL`), иначе одна строка «skipped». Action сам ничего не коммитит и PR не открывает;
 4. `okf agents-check $OKF_REPO --base ...` — битые пути и команды в инструкциях;
 5. `okf validate $OKF_BUNDLE --strict` и `okf stale --base ...` — база знаний;
-6. отчёт в лог, в job summary и аннотациями на строки; в PR из этого же репозитория — обновляемым комментарием.
+6. отчёт в лог, в job summary и аннотациями на строки; в PR из этого же репозитория — обновляемым комментарием;
+7. по желанию (`OKF_AUTO_PR=true`) — задание `auto-pr`: на push в `main` правки уходят PR `[OKF-Update]`
+   (`okf fix --pr`), открытый такой PR обновляется, а не дублируется.
 
 Коннекторы Confluence и Jira — по желанию: переменные `OKF_CONFLUENCE_URL`, `OKF_JIRA_URL`, `OKF_ATLASSIAN_EMAIL`
 и секреты `OKF_ATLASSIAN_TOKEN` или `OKF_ATLASSIAN_PAT`. Без них шаги работают как раньше и в сеть не ходят.
@@ -664,7 +688,7 @@ okf validate examples/demo/knowledge --strict && okf agents examples/demo/knowle
 ## Структура
 
 ```text
-src/okf/        trust.py (карта доверия, verify), fix.py (правки и черновики), scan.py (проба), instructions.py (agents-check), schema.py (поля и правила OKF,
+src/okf/        trust.py (карта доверия, verify), fix.py (правки и черновики), pr.py (okf fix --pr), scan.py (проба), instructions.py (agents-check), schema.py (поля и правила OKF,
                 профили okf и strict), importer.py (okf import), view.py (report.html, okf view), scaffold.py (okf init), validate.py, stale.py,
                 agents.py, bundle.py, git.py, cli.py
 src/okf/sources/ коннекторы: base.py (интерфейс Source), git.py, confluence.py, jira.py, http.py (запросы, фикстуры)

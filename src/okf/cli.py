@@ -17,6 +17,7 @@ from okf.git import (
 )
 from okf.fix import KEY_HELP, FixError, ReplayProvider, apply, plan_drafts, plan_fixes, provider_from_env, render
 from okf.importer import import_confluence
+from okf.pr import PrError, open_pr
 from okf.instructions import check_repository
 from okf.scan import ScanError, find_repos, parse_repos, scan, score
 from okf.scaffold import init as init_scaffold
@@ -95,7 +96,10 @@ def _parser() -> argparse.ArgumentParser:
 
     fix = commands.add_parser("fix", help="propose fixes for broken and outdated instructions: a diff, --apply writes it")
     fix.add_argument("repo", nargs="?", default=".", help="repository or directory (default: .)")
-    fix.add_argument("--apply", action="store_true", help="write the fixes; rewritten sections become not verified")
+    write = fix.add_mutually_exclusive_group()
+    write.add_argument("--apply", action="store_true", help="write the fixes; rewritten sections become not verified")
+    write.add_argument("--pr", action="store_true", help="commit the fixes to a branch okf/update-<base>-<sha> and "
+                       "open a pull request [OKF-Update] with gh (or update the open one)")
     fix.add_argument("--draft", action="store_true",
                      help="also ask an LLM to redraft sections whose code changed (your own key: " + KEY_HELP + ")")
     fix.add_argument("--replay", metavar="FILE", help="--draft from a saved model answer instead of a model call")
@@ -369,6 +373,21 @@ def _fix(args: argparse.Namespace) -> int:
     drafts = sum(not d.rejected for d in plan.drafts)
     print(f"okf fix: {len(plan.edits)} mechanical fixes, {drafts} drafts, {len(plan.manual)} need a manual fix",
           file=sys.stderr)
+    if args.pr:
+        if git_root is None:
+            print("okf: error: --pr needs a git repository", file=sys.stderr)
+            return 2
+        try:
+            pull = open_pr(plan, git_root, now if args.now else None)
+        except PrError as exc:
+            print(f"okf: error: {exc}", file=sys.stderr)
+            return 2
+        if pull is None:
+            print("okf fix: nothing to fix, so no pull request", file=sys.stderr)
+        else:
+            print(f"okf fix: {'updated the open' if pull.updated else 'opened a'} pull request from {pull.branch}: "
+                  f"{pull.url}", file=sys.stderr)
+        return 0
     if args.apply and (plan.edits or drafts):
         try:
             units = apply(plan, git_root, now if args.now else None)
