@@ -1,0 +1,53 @@
+{
+  "results": [
+    {
+      "id": "131073",
+      "status": "current",
+      "title": "Метрики продукта",
+      "spaceId": "98305",
+      "parentId": "98400",
+      "version": {
+        "number": 7,
+        "message": "",
+        "minorEdit": false,
+        "authorId": "5f1a00demo",
+        "createdAt": "2026-08-28T12:00:00.000Z"
+      },
+      "body": {
+        "storage": {
+          "value": "<p>Определения продуктовых метрик Wheelo. Владелец — продакт, вопросы в эпике <ac:structured-macro ac:name=\"jira\" ac:schema-version=\"1\"><ac:parameter ac:name=\"key\">WHL-42</ac:parameter></ac:structured-macro>.</p><h2>Конверсия в поездку</h2><p>Доля сессий с открытой картой, которые закончились стартом поездки. <strong>Сессия</strong> — использование приложения с открытой картой; пауза дольше 30 минут начинает новую.</p><ul><li>Числитель — сессии с <code>POST /rides</code> → 201.</li><li>Знаменатель — все сессии с открытой картой.</li></ul><ac:structured-macro ac:name=\"code\" ac:schema-version=\"1\"><ac:parameter ac:name=\"language\">sql</ac:parameter><ac:plain-text-body><![CDATA[SELECT count(*) FILTER (WHERE ride_started) * 1.0 / count(*)\nFROM sessions\nWHERE map_opened;]]></ac:plain-text-body></ac:structured-macro><h2>Где смотреть</h2><p><a href=\"https://metabase.wheelo.example/dashboard/12\">Дашборд конверсии</a> в Metabase.</p><table><tbody><tr><th>Метрика</th><th>Сейчас</th><th>Цель Q4</th></tr><tr><td>Конверсия в поездку</td><td>14%</td><td>18%</td></tr></tbody></table>",
+          "representation": "storage"
+        }
+      },
+      "_links": {
+        "webui": "/spaces/WHL/pages/131073/Metriki+produkta",
+        "base": "https://wheelo.atlassian.net/wiki"
+      }
+    },
+    {
+      "id": "131074",
+      "status": "current",
+      "title": "Тарифы и биллинг",
+      "spaceId": "98305",
+      "parentId": "98400",
+      "version": {
+        "number": 3,
+        "message": "",
+        "minorEdit": false,
+        "authorId": "5f1a00demo",
+        "createdAt": "2026-10-03T09:00:00.000Z"
+      },
+      "body": {
+        "storage": {
+          "value": "<p>Поминутный тариф — <strong>9 ₽</strong> в минуту, холд при старте 300 ₽.</p><ul><li>Ночью (00:00–06:00) — 7 ₽ в минуту.</li></ul>",
+          "representation": "storage"
+        }
+      },
+      "_links": {
+        "webui": "/spaces/WHL/pages/131074/Tarify+i+billing",
+        "base": "https://wheelo.atlassian.net/wiki"
+      }
+    }
+  ],
+  "_links": {}
+}

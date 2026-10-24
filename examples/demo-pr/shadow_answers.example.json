@@ -1,0 +1,13 @@
+{
+  "note": "EXAMPLE, written by hand for offline demos of okf shadow --replay. Not produced by a model call: with a key (ANTHROPIC_API_KEY) okf shadow asks the model itself.",
+  "provider": "anthropic",
+  "model": "claude-opus-5-5",
+  "units": {
+    "shadow:auth-lockout:open": {"open": ["auth_flow.md"], "why": "the auth flow describes SMS codes and lockouts"},
+    "shadow:auth-lockout:answer": {"answer": "После 5 неверных кодов за 15 минут номер блокируется на 15 минут.", "used": ["auth_flow.md"]},
+    "shadow:minute-price:open": {"open": ["billing_service.md"], "why": "billing describes the per-minute price"},
+    "shadow:minute-price:answer": {"answer": "Минута поездки — 8 ₽, минимум одна минута.", "used": ["billing_service.md"]},
+    "shadow:gps-retention:open": {"open": ["data_retention_policy.md"], "why": "the retention policy covers GPS points"},
+    "shadow:gps-retention:answer": {"answer": "GPS-точки поездок храним не дольше 180 дней.", "used": ["data_retention_policy.md"]}
+  }
+}

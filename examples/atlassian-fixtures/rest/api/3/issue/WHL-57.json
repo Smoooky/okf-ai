@@ -1,0 +1,43 @@
+{
+  "id": "10057",
+  "key": "WHL-57",
+  "fields": {
+    "summary": "Ночной тариф",
+    "issuetype": {
+      "name": "Task"
+    },
+    "status": {
+      "name": "In Progress",
+      "statusCategory": {
+        "key": "indeterminate",
+        "name": "In Progress"
+      }
+    },
+    "updated": "2026-10-20T12:00:00.000+0300",
+    "resolutiondate": null
+  },
+  "changelog": {
+    "startAt": 0,
+    "maxResults": 1,
+    "total": 1,
+    "histories": [
+      {
+        "id": "20101",
+        "author": {
+          "displayName": "Мария (backend)"
+        },
+        "created": "2026-10-01T10:00:00.000+0300",
+        "items": [
+          {
+            "field": "status",
+            "fieldtype": "jira",
+            "from": null,
+            "fromString": "To Do",
+            "to": null,
+            "toString": "In Progress"
+          }
+        ]
+      }
+    ]
+  }
+}

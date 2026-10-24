@@ -1,0 +1,133 @@
+:root {
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #1e2635;
+  background: #f5f6f8;
+  font-synthesis: none;
+}
+* { box-sizing: border-box; }
+html, body, #app { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+button, textarea { font: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: not-allowed; opacity: .45; }
+#app {
+  display: grid;
+  place-items: center;
+  padding: clamp(8px, 2.2vh, 24px);
+  user-select: none;
+  -webkit-user-select: none;
+}
+.shell {
+  width: min(100%, 760px);
+  height: min(100%, 760px);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: clamp(20px, 4vw, 48px);
+  border: 1px solid #e6e9ef;
+  border-radius: 22px;
+  background: #fff;
+  box-shadow: 0 18px 55px rgba(30, 42, 64, .055);
+}
+h1 { letter-spacing: -.035em; line-height: 1.16; }
+.hero, .done, .interview { justify-content: center; }
+.hero-content, .done-content { max-width: 590px; }
+.hero h1, .done h1 { font-size: clamp(2rem, 4.5vw, 3rem); margin: 0 0 24px; }
+.hero p, .done p { color: #596273; font-size: 1.05rem; line-height: 1.5; margin: 0 0 14px; }
+.hero .time-note { margin: 0 0 34px; color: #1e2635; font-weight: 600; }
+.primary, .secondary {
+  min-height: 48px;
+  padding: 10px 22px;
+  border-radius: 10px;
+  font-weight: 650;
+}
+.primary { color: #fff; background: #4358dc; border: 1px solid #4358dc; }
+.primary:hover:not(:disabled) { background: #3247ca; }
+.secondary { color: #344054; background: #fff; border: 1px solid #d8dde6; }
+.secondary:hover { background: #f8f9fb; }
+.interview h1 {
+  flex: none;
+  font-size: clamp(1.5rem, 3vw, 2.15rem);
+  margin: 0 0 20px;
+}
+.options {
+  flex: none;
+  display: grid;
+  gap: 8px;
+}
+.options:empty { display: none; }
+.option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 49px;
+  padding: 10px 14px;
+  text-align: left;
+  line-height: 1.27;
+  color: #263246;
+  background: #fff;
+  border: 1px solid #dfe3e9;
+  border-radius: 10px;
+}
+.option:hover { border-color: #8996eb; background: #fafaff; }
+.option.selected { border-color: #4358dc; background: #f2f4ff; }
+.option-dot { flex: none; width: 16px; height: 16px; border: 1.5px solid #aeb6c4; border-radius: 50%; }
+.option.selected .option-dot { border: 5px solid #4358dc; }
+.input-wrap { flex: none; margin-top: 14px; }
+.input-wrap.hidden { display: none; }
+.input-wrap label { display: block; margin-bottom: 7px; font-size: .82rem; font-weight: 650; }
+.input-wrap textarea {
+  display: block;
+  width: 100%;
+  min-height: 88px;
+  padding: 11px 12px;
+  resize: none;
+  border: 1px solid #ccd3df;
+  border-radius: 9px;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.input-wrap textarea:focus { outline: 2px solid #dbe0ff; border-color: #4358dc; }
+.hint { margin: 6px 0 0; color: #7c8593; font-size: .78rem; }
+.shell { position: relative; }
+.lang { position: absolute; top: 16px; right: 16px; display: flex; gap: 4px; }
+.lang-btn { min-height: 32px; padding: 4px 10px; border: 1px solid #d8dde6; border-radius: 8px; background: #fff; color: #596273; font-size: .8rem; font-weight: 650; }
+.lang-btn.active { color: #fff; background: #4358dc; border-color: #4358dc; }
+.hero .privacy { font-size: .9rem; color: #7c8593; }
+.done .status { font-size: .95rem; color: #344054; }
+.controls { flex: none; display: flex; justify-content: space-between; gap: 12px; margin-top: 20px; }
+.actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 30px; }
+@media (max-width: 600px) {
+  .shell { width: 100%; height: 100%; padding: 24px 20px; border-radius: 16px; }
+  .hero h1, .done h1 { font-size: clamp(1.9rem, 7vw, 2.5rem); }
+  .hero p, .done p { font-size: .96rem; }
+  .interview h1 { font-size: 1.55rem; margin-bottom: 16px; }
+  .options { gap: 7px; }
+  .option { min-height: 45px; padding: 8px 11px; gap: 10px; font-size: .9rem; }
+  .controls { margin-top: 16px; }
+  .has-other .options { gap: 5px; }
+  .has-other .option { min-height: 40px; padding: 6px 10px; }
+  .has-other .input-wrap textarea { min-height: 65px; }
+}
+@media (max-height: 620px) {
+  #app { padding: 6px; }
+  .shell { height: 100%; padding-top: 16px; padding-bottom: 16px; }
+  .interview h1 { font-size: 1.3rem; margin-bottom: 10px; }
+  .options { gap: 5px; }
+  .option, .has-other .option { min-height: 35px; padding: 5px 9px; font-size: .81rem; line-height: 1.18; }
+  .option-dot { width: 13px; height: 13px; }
+  .option.selected .option-dot { border-width: 4px; }
+  .input-wrap { margin-top: 8px; }
+  .input-wrap textarea, .has-other .input-wrap textarea { min-height: 52px; padding: 7px 9px; }
+  .hint { margin-top: 3px; font-size: .7rem; }
+  .controls { margin-top: 10px; }
+  .primary, .secondary { min-height: 39px; padding: 7px 14px; }
+}
+@media (max-height: 480px) {
+  .shell { padding-top: 9px; padding-bottom: 9px; }
+  .interview h1 { font-size: 1.06rem; margin-bottom: 6px; }
+  .option, .has-other .option { min-height: 27px; padding: 3px 7px; font-size: .7rem; }
+  .options { gap: 3px; }
+  .input-wrap textarea, .has-other .input-wrap textarea { min-height: 40px; }
+}
